@@ -1,0 +1,276 @@
+.page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif;
+}
+
+.container {
+  display: flex;
+  width: 100%;
+  max-width: 880px;
+  min-height: 520px;
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  margin: 16px;
+}
+
+/* Left branding panel */
+.brand {
+  flex: 1;
+  background: linear-gradient(160deg, #1e40af 0%, #3b82f6 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 40px;
+}
+
+.brandInner {
+  color: #fff;
+}
+
+.brandTitle {
+  font-size: 42px;
+  font-weight: 400;
+  margin: 0 0 8px;
+  letter-spacing: -0.5px;
+}
+
+.brandDesc {
+  font-size: 16px;
+  margin: 0 0 32px;
+  opacity: 0.85;
+}
+
+.features {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.features li {
+  font-size: 14px;
+  opacity: 0.9;
+  padding-left: 20px;
+  position: relative;
+}
+
+.features li::before {
+  content: '✓';
+  position: absolute;
+  left: 0;
+  font-weight: 700;
+  opacity: 0.7;
+}
+
+/* Right form panel */
+.formWrap {
+  flex: 1;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 40px;
+}
+
+.card {
+  width: 100%;
+  max-width: 320px;
+}
+
+.tabs {
+  display: flex;
+  margin-bottom: 28px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.tab {
+  flex: 1;
+  padding: 12px 0;
+  font-size: 15px;
+  font-weight: 500;
+  color: #9ca3af;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  font-family: inherit;
+  transition: color 0.2s, border-color 0.2s;
+}
+
+.tab:hover {
+  color: #374151;
+}
+
+.tabActive {
+  color: #111827;
+  border-bottom-color: #2563eb;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.label {
+  font-size: 13px;
+  font-weight: 500;
+  color: #374151;
+}
+
+.input {
+  width: 100%;
+  padding: 11px 14px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-size: 14px;
+  outline: none;
+  box-sizing: border-box;
+  font-family: inherit;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  background: #fff;
+}
+
+.input:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.08);
+}
+
+.input::placeholder {
+  color: #9ca3af;
+}
+
+.error {
+  background: #fef2f2;
+  color: #dc2626;
+  font-size: 13px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid #fecaca;
+}
+
+.btnPrimary {
+  width: 100%;
+  padding: 12px;
+  border-radius: 8px;
+  background: #2563eb;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.2s;
+  margin-top: 4px;
+}
+
+.btnPrimary:hover {
+  background: #1d4ed8;
+}
+
+.btnPrimary:disabled {
+  background: #93c5fd;
+  cursor: not-allowed;
+}
+
+.divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 24px 0;
+}
+
+.dividerText {
+  font-size: 12px;
+  color: #9ca3af;
+  white-space: nowrap;
+}
+
+.divider::before,
+.divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: #e5e7eb;
+}
+
+.btnWechat {
+  width: 100%;
+  padding: 12px;
+  border-radius: 8px;
+  background: #fff;
+  color: #07c160;
+  font-size: 14px;
+  font-weight: 600;
+  border: 1px solid #07c160;
+  cursor: pointer;
+  font-family: inherit;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: background 0.2s;
+}
+
+.btnWechat:hover {
+  background: #f0fdf4;
+}
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+  .page {
+    background: #fff;
+    align-items: flex-start;
+    padding-top: 0;
+  }
+
+  .container {
+    flex-direction: column;
+    box-shadow: none;
+    border-radius: 0;
+    margin: 0;
+    min-height: 100vh;
+    max-width: none;
+  }
+
+  .brand {
+    padding: 32px 24px;
+    flex: none;
+  }
+
+  .brandTitle {
+    font-size: 32px;
+    font-weight: 400;
+  }
+
+  .brandDesc {
+    margin-bottom: 16px;
+  }
+
+  .features {
+    display: none;
+  }
+
+  .formWrap {
+    padding: 32px 24px;
+    flex: 1;
+    align-items: flex-start;
+  }
+
+  .card {
+    max-width: none;
+  }
+}

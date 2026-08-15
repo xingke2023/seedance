@@ -1,0 +1,204 @@
+.wrapper {
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid #334155;
+}
+
+.canvas {
+  width: 100%;
+  height: 300px;
+  background: #1e293b;
+}
+
+.toolbar {
+  display: flex;
+  gap: 16px;
+  padding: 10px 12px;
+  background: #1e293b;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.toolLabel {
+  font-size: 12px;
+  color: #94a3b8;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.toolValue {
+  color: #e2e8f0;
+  font-size: 11px;
+  min-width: 28px;
+}
+
+.toolSelect {
+  padding: 3px 6px;
+  border-radius: 4px;
+  border: 1px solid #475569;
+  background: #334155;
+  color: #e2e8f0;
+  font-size: 12px;
+}
+
+.toolHint {
+  font-size: 11px;
+  color: #64748b;
+  margin-left: auto;
+}
+
+/* Subject Properties Panel */
+.propsPanel {
+  padding: 10px 12px;
+  background: #0f172a;
+  border-top: 1px solid #334155;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.propsHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.propsTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.propsClose {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #334155;
+  border: none;
+  color: #94a3b8;
+  font-size: 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.propsClose:hover {
+  background: #475569;
+  color: #e2e8f0;
+}
+
+.propsRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.propsLabel {
+  font-size: 11px;
+  color: #64748b;
+  min-width: 32px;
+}
+
+.propsInput {
+  width: 52px;
+  padding: 3px 5px;
+  border: 1px solid #475569;
+  border-radius: 3px;
+  background: #1e293b;
+  color: #e2e8f0;
+  font-size: 11px;
+  text-align: center;
+}
+.propsInput:focus {
+  border-color: #3b82f6;
+  outline: none;
+}
+
+.propsSlider {
+  width: 80px;
+  accent-color: #3b82f6;
+}
+
+.propsSliderWide {
+  width: 120px;
+  accent-color: #3b82f6;
+}
+
+/* Color Swatches */
+.colorRow {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.colorSwatch {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: border-color .1s;
+}
+.colorSwatch:hover {
+  border-color: #94a3b8;
+}
+.colorSwatchActive {
+  border-color: #fff;
+  box-shadow: 0 0 4px rgba(255,255,255,0.4);
+}
+
+/* Pose Buttons */
+.poseRow {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.poseBtn {
+  padding: 3px 8px;
+  border-radius: 10px;
+  border: 1px solid #475569;
+  background: #1e293b;
+  color: #94a3b8;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all .1s;
+}
+.poseBtn:hover {
+  border-color: #3b82f6;
+  color: #e2e8f0;
+}
+.poseBtnActive {
+  background: #1e40af;
+  border-color: #3b82f6;
+  color: #fff;
+}
+
+/* Pose Sliders (custom mode) */
+.poseSliders {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 6px 0;
+}
+
+.poseSliderItem {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.poseSliderLabel {
+  min-width: 36px;
+}
+
+.poseSliderValue {
+  min-width: 24px;
+  text-align: right;
+  color: #e2e8f0;
+  font-size: 10px;
+}
