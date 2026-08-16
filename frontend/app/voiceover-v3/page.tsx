@@ -651,6 +651,7 @@ function ParamsPanel(p: {
   duration: number;
   mediaItems: MediaItem[];
   videoSubjects: ProjectSubject[];
+  scriptAnalysis: Array<{ label: string; type: string; appearance: string; personality: string; linkedSubjectId?: string }>;
 }) {
   const is2x = p.model.includes('2-0');
   const is15pro = p.model.includes('1-5') || p.model.includes('1.5');
@@ -665,7 +666,11 @@ function ParamsPanel(p: {
   // Image descriptions text
   const subjectsWithImg = p.videoSubjects.filter(s => s.image_url);
   const imgDescLines: string[] = [];
-  subjectsWithImg.forEach((s, i) => imgDescLines.push(`图片${i + 1}：角色「${s.label}」— ${s.description || '见图片'}`));
+  subjectsWithImg.forEach((s, i) => {
+    const analysis = p.scriptAnalysis.find(a => a.linkedSubjectId === s.id);
+    const name = analysis?.label || s.label;
+    imgDescLines.push(`图片${i + 1}：角色「${name}」— ${s.description || '见图片'}`);
+  });
   const mImagesForDesc = readyMedia.filter(m => m.mediaType === 'image');
   mImagesForDesc.forEach((m, i) => imgDescLines.push(`图片${subjectsWithImg.length + i + 1}：参考素材「${m.name || '素材'}」— ${(m as any).description || ''}`));
   if (imgDescLines.length > 0) contentItems.push({ type: 'text', text: imgDescLines.join('\n') });
@@ -1154,7 +1159,7 @@ export default function VoiceoverPage() {
       api.get<any>(`/projects/${projectId}`).then(p => { if (p?.name) setProjectName(p.name); }).catch(() => {});
       api.get<ProjectSubject[]>(`/projects/${projectId}/subjects`).then(subs => {
         setProjectSubjects(subs || []);
-        if (!videoId) setVideoSubjects(subs || []);
+        if (!videoId) setVideoSubjects([]);
       }).catch(() => {});
     }
 
@@ -1181,6 +1186,9 @@ export default function VoiceoverPage() {
             if (data.params.subtitleStyle) setSubtitleStyle(data.params.subtitleStyle);
             if (data.params.banner) setBanner(data.params.banner);
             if (data.params.bannerStyle) setBannerStyle(data.params.bannerStyle);
+            if (Array.isArray(data.params.scriptAnalysis) && data.params.scriptAnalysis.length > 0) {
+              setScriptAnalysis(data.params.scriptAnalysis);
+            }
           }
           if (data.seed != null) { batchSeedRef.current = data.seed; setSeed(data.seed); }
           // Load shots from DB
@@ -1289,8 +1297,9 @@ export default function VoiceoverPage() {
     if (videoId) {
       const payload: any = {};
       if (videoDirty) {
-        Object.assign(payload, { script, subtitle_input: subtitleInput, style, ratio, voice, params: { model, resolution, generateAudio, watermark, seed, serviceTier, returnLastFrame, draft, webSearch, subtitleStyle, banner, bannerStyle } });
+        Object.assign(payload, { script, subtitle_input: subtitleInput, style, ratio, voice });
       }
+      payload.params = { model, resolution, generateAudio, watermark, seed, serviceTier, returnLastFrame, draft, webSearch, subtitleStyle, banner, bannerStyle, scriptAnalysis: scriptAnalysis.map(s => ({ label: s.label, type: s.type, appearance: s.appearance, personality: s.personality, linkedSubjectId: s.linkedSubjectId })) };
       payload.subject_ids = videoSubjects.map(s => s.id);
       payload.media_items = mediaItems.map(m => ({ media_type: m.mediaType, url: m.url, name: m.name, description: m.description }));
       promises.push(api.put(`/videos/${videoId}`, payload).catch(() => {}));
@@ -1480,15 +1489,15 @@ export default function VoiceoverPage() {
   }
 
   function linkAnalysisSubject(analysisIdx: number, subjectId: string) {
-    const oldLinked = scriptAnalysis[analysisIdx]?.linkedSubjectId;
-    if (oldLinked && oldLinked !== subjectId) {
-      setVideoSubjects(prev => prev.filter(vs => vs.id !== oldLinked));
-    }
-    setScriptAnalysis(prev => prev.map((s, i) => i === analysisIdx ? { ...s, linkedSubjectId: subjectId } : s));
-    const sub = projectSubjects.find(ps => ps.id === subjectId);
-    if (sub && !videoSubjects.some(vs => vs.id === subjectId)) {
-      setVideoSubjects(prev => [...prev, sub]);
-    }
+    // Update scriptAnalysis link
+    const newAnalysis = scriptAnalysis.map((s, i) => i === analysisIdx ? { ...s, linkedSubjectId: subjectId } : s);
+    setScriptAnalysis(newAnalysis);
+    // Rebuild videoSubjects in scriptAnalysis order (allow duplicates)
+    const orderedSubs = newAnalysis
+      .filter(a => a.linkedSubjectId)
+      .map(a => projectSubjects.find(ps => ps.id === a.linkedSubjectId))
+      .filter(Boolean) as ProjectSubject[];
+    setVideoSubjects(orderedSubs);
   }
 
   async function handleAnalyzeSubjects() {
@@ -1515,22 +1524,6 @@ export default function VoiceoverPage() {
     Object.values(pollRefs.current).forEach(clearInterval);
     pollRefs.current = {};
 
-    // 若有图片素材且尚未定义主体，先自动分析主体
-    let resolvedSubjectDefs = subjectDefs.trim();
-    const images = mediaItems.filter(m => m.mediaType === 'image' && !m.uploading && (m.previewUrl || m.url));
-    if (images.length > 0 && !resolvedSubjectDefs) {
-      setAnalyzingSubjects(true); setSubjectError('');
-      try {
-        const media = images.map(m => ({ url: m.url, mediaType: m.mediaType, previewUrl: m.previewUrl || m.url }));
-        const result = await api.post<{ definitions: string[]; summary: string; usageHint: string }>('/voiceover/analyze-subjects', { media });
-        resolvedSubjectDefs = result.definitions.join('\n');
-        setSubjectDefs(resolvedSubjectDefs);
-        prevSubjectDefsRef.current = resolvedSubjectDefs;
-      } catch (err) {
-        setSubjectError(err instanceof Error ? err.message : '主体分析失败');
-      } finally { setAnalyzingSubjects(false); }
-    }
-
     try {
       const readyMedia = mediaItems.filter(m => m.url && !m.uploading);
       const subjectImagesCount = videoSubjects.filter(s => s.image_url).length;
@@ -1542,20 +1535,25 @@ export default function VoiceoverPage() {
       const withoutImage = videoSubjects.filter(s => !s.image_url);
       const characterLines: string[] = [];
       withImage.forEach((s, i) => {
-        characterLines.push(`角色「${s.label}」绑定<图片${i + 1}>，外貌描述：${s.description || '见图片'}`);
+        const analysis = scriptAnalysis.find(a => a.linkedSubjectId === s.id);
+        const name = analysis?.label || s.label;
+        characterLines.push(`角色「${name}」绑定<图片${i + 1}>，外貌描述：${s.description || '见图片'}`);
       });
       withoutImage.forEach(s => {
-        characterLines.push(`角色「${s.label}」，外貌描述：${s.description || '未提供'}`);
+        const analysis = scriptAnalysis.find(a => a.linkedSubjectId === s.id);
+        const name = analysis?.label || s.label;
+        characterLines.push(`角色「${name}」，外貌描述：${s.description || '未提供'}`);
       });
       const characterDefs = characterLines.length > 0 ? characterLines.join('\n') : '';
-      const finalSubjectDefs = [characterDefs, resolvedSubjectDefs].filter(Boolean).join('\n');
+      const finalSubjectDefs = characterDefs || '';
 
       // Build imageDescriptions: 角色图片描述 + 参考素材图片描述
       const descLines: string[] = [];
       withImage.forEach((s, i) => {
         const analysis = scriptAnalysis.find(a => a.linkedSubjectId === s.id);
         const desc = analysis ? `${analysis.appearance}；${analysis.personality}` : (s.description || '');
-        descLines.push(`图片${i + 1}：角色「${s.label}」— ${desc || '见图片'}`);
+        const name = analysis?.label || s.label;
+        descLines.push(`图片${i + 1}：角色「${name}」— ${desc || '见图片'}`);
       });
       const mediaImages = readyMedia.filter(m => m.mediaType === 'image');
       mediaImages.forEach((m, i) => {
@@ -1696,7 +1694,8 @@ export default function VoiceoverPage() {
       withImg.forEach((s, i) => {
         const analysis = scriptAnalysis.find(a => a.linkedSubjectId === s.id);
         const desc = analysis ? `${analysis.appearance}；${analysis.personality}` : (s.description || '');
-        descLines.push(`图片${i + 1}：角色「${s.label}」— ${desc || '见图片'}`);
+        const name = analysis?.label || s.label;
+        descLines.push(`图片${i + 1}：角色「${name}」— ${desc || '见图片'}`);
       });
       const mediaImages = mediaItems.filter(m => m.url && !m.uploading && m.mediaType === 'image');
       mediaImages.forEach((m, i) => {
@@ -1824,6 +1823,7 @@ export default function VoiceoverPage() {
     duration: shots[0]?.duration || 8,
     mediaItems,
     videoSubjects,
+    scriptAnalysis,
   };
 
   return (
@@ -2006,7 +2006,17 @@ export default function VoiceoverPage() {
                   </div>
 
                   {/* 剧本分析结果 */}
-                  {scriptAnalysis.length > 0 && (<>
+                  {scriptAnalysis.length > 0 && (() => {
+                    // Build image number per analysis index (not per subject id, since duplicates allowed)
+                    let imgCounter = 0;
+                    const analysisImgNum: number[] = scriptAnalysis.map(a => {
+                      if (a.linkedSubjectId) {
+                        const sub = projectSubjects.find(ps => ps.id === a.linkedSubjectId);
+                        if (sub?.image_url) return ++imgCounter;
+                      }
+                      return 0;
+                    });
+                    return (<>
                     <p onClick={() => setAnalysisCollapsed(v => !v)} className={styles.cardTitle} style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 16, marginBottom: analysisCollapsed ? 0 : 8, cursor: 'pointer', userSelect: 'none' }}>
                       <span style={{ fontSize: 10, transition: 'transform 0.2s', transform: analysisCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}>▼</span>
                       角色（{scriptAnalysis.length}个）
@@ -2022,11 +2032,15 @@ export default function VoiceoverPage() {
                               </div>
                               {item.linkedSubjectId && (() => {
                                 const linked = projectSubjects.find(ps => ps.id === item.linkedSubjectId);
+                                const imgNum = analysisImgNum[idx];
                                 return linked ? (
-                                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#16a34a', background: '#f0fdf4', padding: '2px 6px', borderRadius: 4 }}>
-                                    {linked.image_url && <img src={linked.image_url} alt="" style={{ width: 16, height: 16, borderRadius: 2, objectFit: 'cover' }} />}
-                                    {linked.label}
-                                    <button type="button" onClick={() => { setScriptAnalysis(prev => prev.map((s, i) => i === idx ? { ...s, linkedSubjectId: undefined } : s)); setVideoSubjects(prev => prev.filter(vs => vs.id !== item.linkedSubjectId)); }}
+                                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#16a34a', background: '#f0fdf4', padding: '2px 6px', borderRadius: 4 }}>
+                                    {linked.image_url && <img src={linked.image_url} alt="" style={{ width: 36, height: 36, borderRadius: 4, objectFit: 'cover' }} />}
+                                    <span style={{ display: 'flex', flexDirection: 'column' }}>
+                                      <span>{linked.label}</span>
+                                      {imgNum > 0 && <span style={{ fontSize: 10, color: '#9ca3af' }}>图片{imgNum}</span>}
+                                    </span>
+                                    <button type="button" onClick={() => { const newA = scriptAnalysis.map((s, i) => i === idx ? { ...s, linkedSubjectId: undefined } : s); setScriptAnalysis(newA); setVideoSubjects(newA.filter(a => a.linkedSubjectId).map(a => projectSubjects.find(ps => ps.id === a.linkedSubjectId)).filter(Boolean) as ProjectSubject[]); }}
                                       style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: 12, padding: 0, lineHeight: 1 }}>×</button>
                                   </span>
                                 ) : null;
@@ -2056,11 +2070,9 @@ export default function VoiceoverPage() {
                                   </span>
                                 )}
                                 <button type="button" onClick={() => {
-                                  const removed = scriptAnalysis[idx];
-                                  if (removed.linkedSubjectId) {
-                                    setVideoSubjects(prev => prev.filter(vs => vs.id !== removed.linkedSubjectId));
-                                  }
-                                  setScriptAnalysis(prev => prev.filter((_, i) => i !== idx));
+                                  const newA = scriptAnalysis.filter((_, i) => i !== idx);
+                                  setScriptAnalysis(newA);
+                                  setVideoSubjects(newA.filter(a => a.linkedSubjectId).map(a => projectSubjects.find(ps => ps.id === a.linkedSubjectId)).filter(Boolean) as ProjectSubject[]);
                                 }}
                                   style={{ background: 'none', border: '1px solid #dc2626', borderRadius: 4, color: '#dc2626', cursor: 'pointer', fontSize: 11, padding: '3px 8px' }}>删除</button>
                               </span>
@@ -2071,7 +2083,8 @@ export default function VoiceoverPage() {
                         ))}
                       </div>
                       )}
-                  </>)}
+                  </>);
+                  })()}
 
                   {/* 参考素材 */}
                   <p className={styles.cardTitle} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: mediaCollapsed ? 0 : 6, marginTop: 20, cursor: 'pointer', userSelect: 'none' }} onClick={() => setMediaCollapsed(v => !v)}>
@@ -2328,7 +2341,8 @@ export default function VoiceoverPage() {
                                   wImg.forEach((s, i) => {
                                     const a = scriptAnalysis.find(x => x.linkedSubjectId === s.id);
                                     const d = a ? `${a.appearance}；${a.personality}` : (s.description || '');
-                                    dLines.push(`图片${i + 1}：角色「${s.label}」— ${d || '见图片'}`);
+                                    const nm = a?.label || s.label;
+                                    dLines.push(`图片${i + 1}：角色「${nm}」— ${d || '见图片'}`);
                                   });
                                   const mImgs = mediaItems.filter(m => m.url && !m.uploading && m.mediaType === 'image');
                                   mImgs.forEach((m, i) => {

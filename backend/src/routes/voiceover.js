@@ -485,7 +485,7 @@ JSON字段中英文双引号必须转义为\\"，只输出纯JSON对象。`
 
   let imageDescHint = ''
   if (imageDescriptions.trim()) {
-    imageDescHint = `\n\n【图片内容说明（生成prompt时参考）】\n${imageDescriptions.trim()}`
+    imageDescHint = `\n\n【参考图片编号与内容说明（每段prompt必须结合以下描述）】\n${imageDescriptions.trim()}\n\n重要：每段 prompt 中引用图片时，必须结合上述描述来丰富画面内容。例如引用角色图片时需融合其外貌/性格描述，引用参考素材时需体现其用途说明。`
   }
 
   let userMsgParts = []
