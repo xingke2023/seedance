@@ -86,14 +86,24 @@ function toDrafts(sb: Storyboard, videoType: VideoType): ShotDraft[] {
 interface Props {
   /** Seeds 视频概念描述 — usually the video's script. */
   initialConcept?: string;
+  /**
+   * Controls 视频类型 from the parent. Pass this when the host page already has
+   * its own 剧本/解说词 selector (voiceover-v3 does) so the two can't disagree —
+   * the component then hides its own radio.
+   */
+  videoType?: VideoType;
   /** Receives the mapped shots; the parent persists them. */
   onGenerated: (shots: ShotDraft[], meta: { title?: string; summary?: string; videoType: VideoType; narrative: Narrative }) => Promise<void> | void;
 }
 
-export default function StoryboardGenerator({ initialConcept = '', onGenerated }: Props) {
+export default function StoryboardGenerator({ initialConcept = '', videoType: controlledType, onGenerated }: Props) {
   const [open, setOpen] = useState(false);
-  const [videoType, setVideoType] = useState<VideoType>('story');
+  const [ownType, setOwnType] = useState<VideoType>('story');
   const [narrative, setNarrative] = useState<Narrative>('free');
+
+  const controlled = controlledType !== undefined;
+  const videoType = controlled ? controlledType : ownType;
+  const setVideoType = (v: VideoType) => { if (!controlled) setOwnType(v); };
 
   const [concept, setConcept]       = useState(initialConcept);
   const [goal, setGoal]             = useState('');
@@ -192,14 +202,24 @@ export default function StoryboardGenerator({ initialConcept = '', onGenerated }
     }
   }
 
+  // initialConcept is captured at mount, but the panel mounts with the page — the
+  // script is usually still empty then. Re-seed on open, without clobbering an
+  // edited concept.
+  function togglePanel() {
+    const next = !open;
+    if (next && !concept.trim() && initialConcept.trim()) setConcept(initialConcept);
+    setOpen(next);
+  }
+
   return (
     <div className={styles.wrap}>
-      <button type="button" className={styles.trigger} onClick={() => setOpen(v => !v)}>
+      <button type="button" className={styles.trigger} onClick={togglePanel}>
         🎬 专业分镜生成
       </button>
 
       {open && (
         <div className={styles.panel}>
+          {!controlled && (
           <div className={styles.axis}>
             <span className={styles.axisLabel}>视频类型</span>
             <div className={styles.structRow}>
@@ -214,6 +234,7 @@ export default function StoryboardGenerator({ initialConcept = '', onGenerated }
               ))}
             </div>
           </div>
+          )}
 
           {videoType === 'story' && (
             <div className={styles.axis}>

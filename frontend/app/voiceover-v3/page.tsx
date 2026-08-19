@@ -7,6 +7,7 @@ import dynamic from 'next/dynamic';
 import { api } from '@/lib/api';
 import { CameraState, ShotSubject, ProjectSubject } from '@/components/video-editor/types';
 import styles from './page.module.css';
+import StoryboardGenerator, { type ShotDraft } from '@/components/library/StoryboardGenerator';
 
 const CameraEditor = dynamic(() => import('@/components/video-editor/CameraEditor'), { ssr: false });
 
@@ -1522,6 +1523,42 @@ export default function VoiceoverPage() {
     } finally { setAnalyzingSubjects(false); }
   }
 
+  // Import from the ported prompt engine (专业分镜). Mirrors handleInit's reset so a
+  // re-import never leaves stale tasks or a merged video from the previous run.
+  async function handleImportStoryboard(drafts: ShotDraft[]) {
+    setInitError('');
+    setTasks({}); setMergedVideoUrl(null); setAudioUrl(null);
+    setDirtyShotIdxs(new Set());
+    Object.values(pollRefs.current).forEach(clearInterval);
+    pollRefs.current = {};
+
+    const imported: VoiceoverShot[] = drafts.map((d, i) => ({
+      shot_number:     i + 1,
+      title:           d.title || `分镜 ${i + 1}`,
+      subtitle:        d.subtitle,
+      description:     d.description,
+      prompt:          d.prompt,
+      duration:        d.duration,
+      ratio,
+      shot_size:       d.shot_type,
+      camera_movement: d.camera_movement,
+      mood:            d.lighting,
+    }));
+
+    setShots(imported);
+    setInitResult({
+      autoShotCount: imported.length,
+      shotCount:     imported.length,
+      shots:         imported,
+      totalVideoDuration: imported.reduce((sum, sh) => sum + (sh.duration || 0), 0),
+    });
+    batchSeedRef.current = seed ?? Math.floor(Math.random() * 2147483647);
+
+    // 解说词模式产出的是成品旁白 — 灌进字幕框，用户可直接点「生成配音」走 TTS
+    const narration = imported.map(sh => sh.subtitle).filter(Boolean).join('');
+    if (narration && !subtitleInput.trim()) setSubtitleInput(narration);
+  }
+
   async function handleInit() {
     if (!script.trim() && !subtitleInput.trim()) return;
     setInitError(''); setIniting(true);
@@ -2179,6 +2216,13 @@ export default function VoiceoverPage() {
                     ) : anyUploading ? '素材上传中，请等待…' : mediaDescMissing ? '请填写素材说明' : initResult ? '重新生成分镜脚本' : '一键生成分镜'}
                   </button>
                   </div>
+
+                  {/* 视频类型由上面的「剧本/解说词」radio 驱动，生成器不再自带那一栏 */}
+                  <StoryboardGenerator
+                    initialConcept={scriptTab === 'subtitle' ? subtitleInput : script}
+                    videoType={scriptTab === 'subtitle' ? 'narration' : 'story'}
+                    onGenerated={handleImportStoryboard}
+                  />
               </div>
 
               {/* ── Step 2 ── */}
