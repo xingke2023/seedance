@@ -18,6 +18,8 @@ const videoRoutes2    = require('./routes/videos')
 const shotRoutes      = require('./routes/shots')
 const subjectRoutes   = require('./routes/subjects')
 const authRoutes      = require('./routes/auth')
+const libraryRoutes   = require('./routes/library')
+const promptRoutes    = require('./routes/prompt')
 const { authMiddleware } = require('./middleware/auth')
 
 function buildApp(opts = {}) {
@@ -97,6 +99,8 @@ function buildApp(opts = {}) {
   app.register(videoRoutes2,    { prefix: '' })
   app.register(shotRoutes,      { prefix: '' })
   app.register(subjectRoutes,   { prefix: '' })
+  app.register(libraryRoutes,   { prefix: '/library' })
+  app.register(promptRoutes,    { prefix: '/prompt' })
 
   return app
 }

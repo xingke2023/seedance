@@ -80,6 +80,7 @@
 - Environment: `.env` file (see `.env.example`)
 - PostgreSQL database `mee2`, user `seedance_user`
 - Tables: `users`, `projects`, `project_subjects`, `videos`, `video_subjects`, `shots`, `video_media`, `user_asset_groups`
+- 提示词/资料库表（`lib_` 前缀，见「提示词与资料库」章节）
 - Video cache at `backend/uploads/.video-cache/` (MP4 + JSON metadata)
 
 ### Database Schema (hierarchy: projects → videos → shots)
@@ -119,6 +120,64 @@
 - `GET /assets/all` — List all assets for picker (remote, filtered by user's groups)
 - `POST /assets/visual-validate/start` — Start H5 liveness verification
 - `GET /assets/visual-validate/:sessionId` — Poll verification status (auto-links group to user on success)
+
+## 提示词与资料库（并入自 fenjing-script）
+
+原 Flask 项目 `/home/ubuntu/fenjing-script`（GitHub: xingke2023/prompt-eng）已移植进来，为**分镜脚本生成**提供提示词工程与素材支撑。原项目仍独立运行在 8129，两边数据已分家。
+
+### 数据表（`mee2`，`lib_` 前缀）
+
+| 表 | 条数 | 用途 |
+|---|---|---|
+| `lib_shot_presets` | 8 | 镜头预设（运动/景别/构图/光线/色调 + 英文片段） |
+| `lib_style_presets` | 8 | 风格预设 |
+| `lib_prompt_templates` | 10 | 提示词模板 |
+| `lib_fragments` | 22 | 素材片段，`type` ∈ character/scene/action/lighting/quality |
+| `lib_insurance_cases` | 956 | 港险案例（分镜取材用） |
+| `lib_insurance_qa` | 1418 | 港险问答 |
+
+历史与收藏（原 `prompts`/`storyboards`/`favorites`）未并入。
+
+### 提示词引擎
+
+- `backend/src/prompt/prompts.js` — 5 个 system prompt，**逐字移植**：`SINGLE_SHOT` / `QCZH`(起承转合) / `STORYBOARD` / `ENHANCE` / `NARRATION`(解说词)。后四个规定了严格 JSON 输出结构，前端与分镜导入依赖，勿随意改写
+- `backend/src/prompt/engine.js` — Anthropic SDK 封装，JSON 用 `jsonrepair` 兜底
+- `backend/src/prompt/guide.js` — 提示词写作指南（结构化数据，非 HTML）
+
+**模型**：`claude-sonnet-5`，走 `tokens.fidelityai.net` 代理（后端是 Bedrock）。该代理**没有 `claude-opus-5`**，sonnet-5 是可用的最强型号。用 `ANTHROPIC_MODEL` 可覆盖。
+开启 adaptive thinking，`max_tokens` 同时封顶思考+正文，所以分镜类调用给到 16000。
+
+### 两个正交维度
+
+分镜生成有两个独立开关，和 voiceover-v3 页面的 radio 一致：
+
+| 参数 | 取值 | 说明 |
+|---|---|---|
+| `video_type` | `story`(剧本) / `narration`(解说词) | 解说词优先级最高，走 `NARRATION_SYSTEM`，每镜产出可直接配音的 `narration_script` |
+| `narrative_structure` | `free`(自由) / `qczh`(起承转合) | 仅在剧本下生效；起承转合至少 4 镜 |
+
+### 接口
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/prompt/storyboard` | 多镜头分镜脚本（三种组合），返回严格 JSON |
+| POST | `/prompt/generate` | 单镜头提示词（Markdown 输出） |
+| POST | `/prompt/enhance` | 提示词优化（JSON 输出） |
+| GET | `/prompt/model` | 当前使用的模型名 |
+| GET | `/library/{shot-presets,style-presets,templates,fragments}` | 素材库，按 `use_count` 排序 |
+| POST | `/library/use/:table/:id` | 使用计数自增（排序权重） |
+| GET | `/library/cases`、`/library/cases/:id`、`/library/cases/tags` | 港险案例，支持 `q`/`tag`/`featured`/分页 |
+| GET | `/library/qa`、`/library/qa/:id`、`/library/qa/tags` | 港险问答 |
+| GET | `/library/guide` | 提示词写作指南 |
+
+全部需登录。`/cases/tags` 必须注册在 `/cases/:id` 之前，否则被路由参数吃掉。
+
+### 前端组件
+
+- `components/library/StoryboardGenerator` — 分镜生成器：视频类型 + 叙事结构 + 视频概念描述 + 可选的目标/受众/基调/核心信息，支持「从港险案例库取材」自动填充概念，生成后先预览再导入分镜表
+- `components/library/LibraryPanel` — 素材库面板，点击条目把英文片段追加到提示词框
+
+两者都挂在 `/projects/[id]/videos/[videoId]` 编辑器上。
 
 ## Development
 

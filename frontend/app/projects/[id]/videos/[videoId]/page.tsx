@@ -7,6 +7,8 @@ import { api } from '@/lib/api';
 import { Shot, Video, ShotSubject, MODELS, RATIOS, AZURE_VOICES, MOVEMENT_TYPES, SHOT_TYPES, LIGHTING_TYPES, CameraState, ProjectSubject } from '@/components/video-editor/types';
 import CameraEditor from '@/components/video-editor/CameraEditor';
 import styles from './page.module.css';
+import StoryboardGenerator, { type ShotDraft } from '@/components/library/StoryboardGenerator';
+import LibraryPanel from '@/components/library/LibraryPanel';
 
 interface VideoListItem {
   id: string;
@@ -111,6 +113,11 @@ export default function VideoEditorPage() {
       }
     } catch {}
     setIniting(false);
+  }
+
+  async function handleImportStoryboard(drafts: ShotDraft[]) {
+    const created = await api.post<Shot[]>(`/videos/${videoId}/shots`, { shots: drafts });
+    if (created) setShots(prev => [...prev, ...created]);
   }
 
   async function handleShotUpdate(shotId: string, fields: Partial<Shot>) {
@@ -316,6 +323,8 @@ export default function VideoEditorPage() {
           </button>
         </div>
 
+        <StoryboardGenerator initialConcept={script} onGenerated={handleImportStoryboard} />
+
         {shots.length === 0 ? (
           <div className={styles.emptyShots}>输入脚本后，点击「一键生成分镜」自动规划</div>
         ) : (
@@ -515,6 +524,10 @@ function ShotModal({ shot, index, videoSubjects, ratio, isGenerating, onClose, o
               rows={3}
               placeholder="视频生成的英文/中文提示词..."
             />
+            <LibraryPanel onInsert={snippet => {
+              const sep = prompt.trim() && !/[,.;]\s*$/.test(prompt.trim()) ? ', ' : prompt.trim() ? ' ' : '';
+              handleTextChange('prompt', prompt.trim() + sep + snippet);
+            }} />
           </div>
           <div className={styles.modalField}>
             <label>旁白/对白</label>

@@ -5,3 +5,4 @@ uploads/
 *.log
 frontend/public/avatars/
 .env.bak.*
+tsconfig.tsbuildinfo
