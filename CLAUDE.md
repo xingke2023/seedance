@@ -4,7 +4,9 @@
 
 - `frontend/` — Next.js App Router (port 8113)
 - `backend/` — Fastify API server (port 8112)
-- Domain: `https://mee.xingke888.com` (nginx → frontend 8113, API 8112)
+- Domain: `https://meeaws.xingke888.com` (本机 AWS 部署, nginx → frontend 8113, API 8112)
+  - `https://sd.xingke888.com` 是同一部署的另一个域名
+  - `https://mee.xingke888.com` 指向另一台服务器,不在本机
 
 ## Frontend
 
@@ -129,13 +131,25 @@ cd backend && node src/app.js  # port 8112
 
 PM2 manages the production processes for seedance2.0 independently.
 
-### Nginx (mee.xingke888.com)
+### Nginx
 
-Config: `/etc/nginx/sites-enabled/mee.xingke888.com.conf`
+两个域名指向同一套服务 (frontend 8113 / backend 8112),配置文件都在仓库根目录并从 sites-enabled 软链:
+
+| 域名 | 配置文件 |
+|---|---|
+| meeaws.xingke888.com | `nginx-meeaws.xingke888.com.conf` |
+| sd.xingke888.com | `nginx-sd.xingke888.com.conf` |
 
 - `location /api/` → `http://127.0.0.1:8112/`
 - `location /uploads/` → `http://127.0.0.1:8112/uploads/`
 - `location /` → `http://127.0.0.1:8113`
+
+Cloudflare 代理在前,SSL 为 Full(非严格)模式,源站两个域名共用 `/etc/letsencrypt/live/sd.xingke888.com/` 证书。
+meeaws 的 80 端口直接服务应用(不做 301),以免 CF 处于 Flexible 模式时产生重定向死循环。
+如需为 meeaws 签发独立证书: `sudo certbot certonly --webroot -w /var/www/html -d meeaws.xingke888.com`
+(配置里已保留 `/.well-known/acme-challenge/` 的 location)。
+
+`WEBHOOK_BASE_URL` (backend/.env) 必须与对外域名一致 — 它用于拼接 `/uploads/` 公网地址传给 Seedance/FidelityAI。
 
 ### PM2 process names (seedance2.0)
 
