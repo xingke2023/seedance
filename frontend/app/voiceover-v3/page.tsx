@@ -122,10 +122,9 @@ function getVideoInfo(file: File): Promise<{ duration: number; width: number; he
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const MODELS = [
-  { value: 'doubao-seedance-2-0-fast',        label: 'Seedance 2.0 Fast' },
   { value: 'doubao-seedance-2-0',             label: 'Seedance 2.0' },
-  { value: 'doubao-seedance-2-0-fast-260128', label: 'Seedance 2.0 Fast (260128)' },
   { value: 'doubao-seedance-2-0-260128',      label: 'Seedance 2.0 (260128)' },
+  { value: 'doubao-seedance-2-5',             label: 'Seedance 2.5' },
 ];
 
 const RESOLUTIONS = [
@@ -993,7 +992,7 @@ export default function VoiceoverPage() {
   const [returnLastFrame, setReturnLastFrame] = useState(false);
   const [draft, setDraft]                 = useState(false);
   const [webSearch, setWebSearch]         = useState(false);
-  const [region, setRegion]               = useState<'overseas' | 'cn'>('overseas');
+  const [region, setRegion]               = useState<'overseas' | 'cn'>('cn');
   const [subtitleMode, setSubtitleMode]   = useState<'on' | 'off'>('off');
   const [subtitleStyle, setSubtitleStyle] = useState<SubtitleStyle>(DEFAULT_SUBTITLE_STYLE);
   const [banner, setBanner]               = useState('');

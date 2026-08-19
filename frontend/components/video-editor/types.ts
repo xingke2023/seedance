@@ -138,8 +138,9 @@ export interface CameraState {
 }
 
 export const MODELS = [
-  { value: 'doubao-seedance-2-0-fast', label: 'Seedance 2.0 Fast' },
   { value: 'doubao-seedance-2-0', label: 'Seedance 2.0' },
+  { value: 'doubao-seedance-2-0-260128', label: 'Seedance 2.0 (260128)' },
+  { value: 'doubao-seedance-2-5', label: 'Seedance 2.5' },
 ];
 
 export const RATIOS = [

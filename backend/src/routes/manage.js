@@ -3,6 +3,8 @@
 const { getFidelityToken } = require('../video/service')
 
 const FIDELITY_BASE_URL = process.env.FIDELITY_BASE_URL || 'https://videogen.fidelityai.cn'
+const FIDELITY_CN_BASE_URL = process.env.FIDELITY_CN_BASE_URL || 'https://vidgen.fidelityai.cn'
+const FIDELITY_CN_API_SK = process.env.FIDELITY_CN_API_SK
 
 async function authFetch(path, options = {}) {
   const token = await getFidelityToken()
@@ -25,6 +27,26 @@ async function authFetch(path, options = {}) {
   return json
 }
 
+async function authFetchCN(path, options = {}) {
+  if (!FIDELITY_CN_API_SK) throw new Error('未配置国内站 FIDELITY_CN_API_SK')
+  const res = await fetch(`${FIDELITY_CN_BASE_URL}${path}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${FIDELITY_CN_API_SK}`,
+      ...(options.headers || {}),
+    },
+  })
+  const text = await res.text()
+  let json
+  try { json = JSON.parse(text) } catch { json = { message: text } }
+  if (!res.ok) {
+    const msg = json.detail || json.error?.message || json.message || `API error ${res.status}`
+    throw new Error(msg)
+  }
+  return json
+}
+
 async function manageRoutes(fastify) {
 
   // ═══ Task List ═══
@@ -34,7 +56,7 @@ async function manageRoutes(fastify) {
       const { page = 1, page_size = 20, status } = request.query || {}
       let url = `/api/v3/contents/generations/tasks?page=${page}&page_size=${page_size}`
       if (status) url += `&status=${status}`
-      const result = await authFetch(url)
+      const result = await authFetchCN(url)
       return { success: true, data: result }
     } catch (err) {
       return reply.code(500).send({ success: false, error: err.message })

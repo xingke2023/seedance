@@ -40,8 +40,8 @@ export default function VideoEditorPage() {
   const [style, setStyle] = useState('');
   const [ratio, setRatio] = useState('9:16');
   const [voice, setVoice] = useState('zh-CN-YunfengNeural');
-  const [model, setModel] = useState('doubao-seedance-2-0-fast');
-  const [region, setRegion] = useState<'overseas' | 'cn'>('overseas');
+  const [model, setModel] = useState('doubao-seedance-2-0');
+  const [region, setRegion] = useState<'overseas' | 'cn'>('cn');
   const [initing, setIniting] = useState(false);
   const [generating, setGenerating] = useState<Set<string>>(new Set());
   const [expandedShot, setExpandedShot] = useState<string | null>(null);
@@ -67,7 +67,7 @@ export default function VideoEditorPage() {
       setStyle(data.style || '');
       setRatio(data.ratio || '9:16');
       setVoice(data.voice || 'zh-CN-YunfengNeural');
-      setModel(data.params?.model || 'doubao-seedance-2-0-fast');
+      setModel(data.params?.model || 'doubao-seedance-2-0');
       setProjectSubjects(projSubs || []);
       setVideoSubjects(vidSubs || []);
       setVideoList(vList || []);

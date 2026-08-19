@@ -2,7 +2,7 @@
 
 const ARK_BASE_URL = 'https://ark.cn-beijing.volces.com/api/v3'
 const FIDELITY_BASE_URL = process.env.FIDELITY_BASE_URL || 'https://videogen.fidelityai.cn'
-const DEFAULT_MODEL = 'doubao-seedance-2-0-fast'
+const DEFAULT_MODEL = 'doubao-seedance-2-0'
 
 let _fidelityToken = null
 let _fidelityTokenExp = 0

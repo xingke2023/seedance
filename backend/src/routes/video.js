@@ -180,6 +180,7 @@ async function videoRoutes(fastify) {
     const regionOverrides = resolveRegionOverrides(region)
     const effectiveApiKey = apiKey || regionOverrides.apiKey || undefined
     const effectiveApiUrl = normaliseApiUrl(apiUrl) || regionOverrides.apiUrl || undefined
+    const effectiveModel = (region === 'cn' && (!model || model === 'doubao-seedance-2-0-fast')) ? 'doubao-seedance-2-0' : model
     const callbackUrl = effectiveApiUrl ? null : autoCallbackUrl()
 
     if (request.user && request.user.used >= request.user.quota) {
@@ -189,7 +190,7 @@ async function videoRoutes(fastify) {
     try {
       const result = await createVideoTask({
         prompt, images, videos, audios, orderedMedia, imageDescriptions,
-        model, resolution, ratio, duration,
+        model: effectiveModel, resolution, ratio, duration,
         seed, generateAudio, watermark, webSearch,
         cameraFixed, returnLastFrame, draft, serviceTier, priority,
         callbackUrl,
@@ -219,6 +220,9 @@ async function videoRoutes(fastify) {
 
     const cached = store.get(taskId)
     const provider = getProvider(taskId)
+    const effectiveProvider = (provider.apiKey || provider.apiUrl)
+      ? provider
+      : resolveRegionOverrides('cn')
     if (cached) {
       const cachedData = normaliseTask(cached)
       if (TERMINAL.has(cachedData.status)) {
@@ -238,7 +242,7 @@ async function videoRoutes(fastify) {
     }
 
     try {
-      const result = await getVideoTask(taskId, provider)
+      const result = await getVideoTask(taskId, effectiveProvider)
       store.set(taskId, result)
       const data = normaliseTask(result)
 

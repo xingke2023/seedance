@@ -661,18 +661,20 @@ export default function ProjectDetailPage() {
   async function loadAssetGroups(type: 'LivenessFace' | 'AIGC') {
     setAssetLoading(true);
     setAssetItemsByGroup({});
+    const region = type === 'AIGC' ? 'cn' : '';
+    const regionParam = region ? `&region=${region}` : '';
     try {
-      const res = await api.get<{ Items: AssetGroup[] }>(`/assets/groups?groupType=${type}`);
+      const res = await api.get<{ Items: AssetGroup[] }>(`/assets/groups?groupType=${type}${regionParam}`);
       const groups = res.Items || [];
       setAssetGroups(groups);
       const allItems: Record<string, Asset[]> = {};
       await Promise.all(groups.map(async (g) => {
         try {
-          const r = await api.get<{ Items: Asset[] }>(`/assets/groups/${g.Id}/assets`);
+          const r = await api.get<{ Items: Asset[] }>(`/assets/groups/${g.Id}/assets${region ? `?region=${region}` : ''}`);
           const items = r.Items || [];
           const enriched = await Promise.all(items.filter(a => a.AssetType === 'Image').map(async (item) => {
             try {
-              const detail = await api.get<{ URL?: string }>(`/assets/item/${item.Id}`);
+              const detail = await api.get<{ URL?: string }>(`/assets/item/${item.Id}${region ? `?region=${region}` : ''}`);
               return { ...item, URL: detail.URL || item.PreviewUrl };
             } catch { return item; }
           }));
@@ -1141,7 +1143,7 @@ export default function ProjectDetailPage() {
       {/* Video List */}
       <section className={styles.videoSection}>
         <div className={styles.subjectHeader}>
-          <h2 className={styles.subjectTitle}>本项目视频 ({videos.length}个)</h2>
+          <h2 className={styles.subjectTitle}>本项目的视频 ({videos.length}个)</h2>
           <button className={styles.addSubjectBtn} onClick={() => setShowCreate(true)}>+ 添加视频</button>
         </div>
 
