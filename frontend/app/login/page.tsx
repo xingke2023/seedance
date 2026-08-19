@@ -36,7 +36,7 @@ export default function LoginPage() {
       const data = json.data
       if (data.accessToken) {
         setTokens(data.accessToken, data.refreshToken)
-        router.push('/voiceover-v3')
+        router.push('/projects')
       } else {
         setError('返回数据异常')
       }

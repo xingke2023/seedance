@@ -41,6 +41,7 @@ export default function VideoEditorPage() {
   const [ratio, setRatio] = useState('9:16');
   const [voice, setVoice] = useState('zh-CN-YunfengNeural');
   const [model, setModel] = useState('doubao-seedance-2-0-fast');
+  const [region, setRegion] = useState<'overseas' | 'cn'>('overseas');
   const [initing, setIniting] = useState(false);
   const [generating, setGenerating] = useState<Set<string>>(new Set());
   const [expandedShot, setExpandedShot] = useState<string | null>(null);
@@ -138,6 +139,7 @@ export default function VideoEditorPage() {
         duration: shot.duration,
         model,
         resolution: '1080p',
+        region: region !== 'overseas' ? region : undefined,
       });
       if (res?.taskId) {
         await handleShotUpdate(shot.id, { task_id: res.taskId, task_status: 'pending' });
@@ -252,6 +254,13 @@ export default function VideoEditorPage() {
                 配音
                 <select className={styles.select} value={voice} onChange={e => { setVoice(e.target.value); scheduleSave({ voice: e.target.value }); }}>
                   {AZURE_VOICES.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
+                </select>
+              </label>
+              <label className={styles.paramItem}>
+                节点
+                <select className={styles.select} value={region} onChange={e => setRegion(e.target.value as 'overseas' | 'cn')}>
+                  <option value="overseas">海外</option>
+                  <option value="cn">国内</option>
                 </select>
               </label>
             </div>

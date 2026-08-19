@@ -62,6 +62,8 @@ const mediaItemSchema = {
 }
 
 const FIDELITYAI_PATH = '/api/v3/contents/generations/tasks'
+const FIDELITY_CN_BASE_URL = process.env.FIDELITY_CN_BASE_URL || 'https://vidgen.fidelityai.cn'
+const FIDELITY_CN_API_SK = process.env.FIDELITY_CN_API_SK
 
 function normaliseApiUrl(url) {
   if (!url) return url
@@ -74,6 +76,16 @@ function normaliseApiUrl(url) {
 function autoCallbackUrl() {
   const base = (process.env.WEBHOOK_BASE_URL || '').replace(/\/$/, '')
   return base ? `${base}/video/webhook` : null
+}
+
+function resolveRegionOverrides(region) {
+  if (region === 'cn' && FIDELITY_CN_API_SK) {
+    return {
+      apiKey: FIDELITY_CN_API_SK,
+      apiUrl: normaliseApiUrl(FIDELITY_CN_BASE_URL),
+    }
+  }
+  return {}
 }
 
 function extractVideoUrl(content) {
@@ -152,6 +164,7 @@ async function videoRoutes(fastify) {
           priority:      { type: 'integer', minimum: 0, maximum: 9 },
           apiKey:        { type: 'string' },
           apiUrl:        { type: 'string' },
+          region:        { type: 'string', enum: ['overseas', 'cn'] },
         },
       },
     },
@@ -161,11 +174,13 @@ async function videoRoutes(fastify) {
       model, resolution, ratio, duration,
       seed, generateAudio, watermark, webSearch,
       cameraFixed, returnLastFrame, draft, serviceTier, priority,
-      apiKey, apiUrl,
+      apiKey, apiUrl, region,
     } = request.body
 
-    const normalisedApiUrl = normaliseApiUrl(apiUrl)
-    const callbackUrl = normalisedApiUrl ? null : autoCallbackUrl()
+    const regionOverrides = resolveRegionOverrides(region)
+    const effectiveApiKey = apiKey || regionOverrides.apiKey || undefined
+    const effectiveApiUrl = normaliseApiUrl(apiUrl) || regionOverrides.apiUrl || undefined
+    const callbackUrl = effectiveApiUrl ? null : autoCallbackUrl()
 
     if (request.user && request.user.used >= request.user.quota) {
       return reply.code(403).send({ success: false, error: '额度已用完' })
@@ -178,11 +193,11 @@ async function videoRoutes(fastify) {
         seed, generateAudio, watermark, webSearch,
         cameraFixed, returnLastFrame, draft, serviceTier, priority,
         callbackUrl,
-        apiKey: apiKey || undefined,
-        apiUrl: normalisedApiUrl || undefined,
+        apiKey: effectiveApiKey,
+        apiUrl: effectiveApiUrl,
       })
       const taskId = result.id ?? result.task_id ?? result.data?.id ?? result.data?.task_id
-      if (apiKey || normalisedApiUrl) setProvider(taskId, { apiKey, apiUrl: normalisedApiUrl })
+      if (effectiveApiKey || effectiveApiUrl) setProvider(taskId, { apiKey: effectiveApiKey, apiUrl: effectiveApiUrl })
       const status = result.status ?? 'queued'
 
       if (request.user) {

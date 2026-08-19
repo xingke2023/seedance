@@ -14,7 +14,7 @@ function CallbackHandler() {
 
     if (accessToken && refreshToken) {
       setTokens(accessToken, refreshToken)
-      router.replace('/voiceover-v3')
+      router.replace('/projects')
     } else {
       router.replace('/login')
     }

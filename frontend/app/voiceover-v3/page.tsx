@@ -642,6 +642,7 @@ function ParamsPanel(p: {
   returnLastFrame: boolean; onToggleReturnLastFrame: () => void;
   draft: boolean; onToggleDraft: () => void;
   webSearch: boolean; onToggleWebSearch: () => void;
+  region: 'overseas' | 'cn'; onRegionChange: (v: 'overseas' | 'cn') => void;
   showJsonPreview: boolean; onToggleJsonPreview: () => void;
   subtitleMode: 'on' | 'off'; onSubtitleModeChange: (v: 'on' | 'off') => void;
   voice: string; onVoiceChange: (v: string) => void;
@@ -759,6 +760,7 @@ function ParamsPanel(p: {
             <Toggle enabled={p.returnLastFrame} onToggle={p.onToggleReturnLastFrame} label="尾帧" />
             {is15pro && <Toggle enabled={p.draft} onToggle={p.onToggleDraft} label="样片" />}
             {is2x && <Toggle enabled={p.webSearch} onToggle={p.onToggleWebSearch} label="联网" />}
+            <Toggle enabled={p.region === 'cn'} onToggle={() => p.onRegionChange(p.region === 'cn' ? 'overseas' : 'cn')} label="国内" />
           </div>
 
           {/* 随机种子 + 优先级 一行 */}
@@ -991,6 +993,7 @@ export default function VoiceoverPage() {
   const [returnLastFrame, setReturnLastFrame] = useState(false);
   const [draft, setDraft]                 = useState(false);
   const [webSearch, setWebSearch]         = useState(false);
+  const [region, setRegion]               = useState<'overseas' | 'cn'>('overseas');
   const [subtitleMode, setSubtitleMode]   = useState<'on' | 'off'>('off');
   const [subtitleStyle, setSubtitleStyle] = useState<SubtitleStyle>(DEFAULT_SUBTITLE_STYLE);
   const [banner, setBanner]               = useState('');
@@ -1711,6 +1714,7 @@ export default function VoiceoverPage() {
         returnLastFrame, draft,
         serviceTier: serviceTier !== 'default' ? serviceTier : undefined,
         priority: priority > 0 ? priority : undefined,
+        region: region !== 'overseas' ? region : undefined,
       });
       const { taskId, status } = res;
       setTasks(prev => ({ ...prev, [idx]: { shotIndex: idx, taskId, status, videoUrl: null, localUrl: null, duration: null, error: null, submitting: false } }));
@@ -1814,6 +1818,7 @@ export default function VoiceoverPage() {
     returnLastFrame, onToggleReturnLastFrame: () => setReturnLastFrame(v => !v),
     draft, onToggleDraft: () => setDraft(v => !v),
     webSearch, onToggleWebSearch: () => setWebSearch(v => !v),
+    region, onRegionChange: (v: 'overseas' | 'cn') => setRegion(v),
     showJsonPreview, onToggleJsonPreview: () => setShowJsonPreview(v => !v),
     subtitleMode, onSubtitleModeChange: (v: 'on' | 'off') => setSubtitleMode(v),
     voice, onVoiceChange: (v: string) => setVoice(v),

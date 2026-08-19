@@ -56,6 +56,7 @@ interface AssetGroup {
   ProjectName: string;
   CreateTime: number;
   GroupType: 'AIGC' | 'LivenessFace';
+  Region?: 'global' | 'cn';
 }
 
 interface Asset {
@@ -68,6 +69,7 @@ interface Asset {
   FileUrl?: string;
   GroupId?: string;
   CreateTime?: number;
+  _thumbnail_url?: string;
 }
 
 export type AssetTab = 'real' | 'virtual';
@@ -84,6 +86,8 @@ export function AssetsPanel({ tab }: { tab: AssetTab }) {
 
   const [validateSession, setValidateSession] = useState<{ sessionId: string; h5Link: string } | null>(null);
   const [validatePolling, setValidatePolling] = useState(false);
+  const [validateRegion, setValidateRegion] = useState<'global' | 'cn'>('cn');
+  const [assetRegion, setAssetRegion] = useState<'global' | 'cn'>('cn');
 
   // AI创作 state
   const [showAiChat, setShowAiChat] = useState(false);
@@ -102,12 +106,13 @@ export function AssetsPanel({ tab }: { tab: AssetTab }) {
   const aiIdRef = useRef(0);
 
   const groupType = tab === 'real' ? 'LivenessFace' : 'AIGC';
+  const currentRegion = tab === 'virtual' ? assetRegion : validateRegion;
 
   const loadGroups = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      const res = await api.get<{ Items: AssetGroup[]; TotalCount: number }>(`/assets/groups?groupType=${groupType}`);
+      const res = await api.get<{ Items: AssetGroup[]; TotalCount: number }>(`/assets/groups?groupType=${groupType}&region=${currentRegion}`);
       const items = res.Items || [];
       setGroups(items);
       setExpandedGroups(new Set(items.map(g => g.Id)));
@@ -117,19 +122,22 @@ export function AssetsPanel({ tab }: { tab: AssetTab }) {
     } finally {
       setLoading(false);
     }
-  }, [groupType]);
+  }, [groupType, currentRegion]);
 
   useEffect(() => { loadGroups(); }, [loadGroups]);
 
   async function loadAssets(groupId: string) {
     try {
-      const res = await api.get<{ Items: Asset[] }>(`/assets/groups/${groupId}/assets`);
+      const res = await api.get<{ Items: Asset[] }>(`/assets/groups/${groupId}/assets?region=${currentRegion}`);
       const items = res.Items || [];
       const enriched = await Promise.all(items.map(async (item) => {
+        if (item._thumbnail_url) {
+          return { ...item, Status: item.Status || 'Active' };
+        }
         if (item.AssetType === 'Image') {
           try {
-            const detail = await api.get<{ URL?: string; Status?: string }>(`/assets/item/${item.Id}`);
-            return { ...item, URL: detail.URL || undefined, Status: detail.Status || item.Status };
+            const detail = await api.get<{ URL?: string; Status?: string; _thumbnail_url?: string }>(`/assets/item/${item.Id}?region=${currentRegion}`);
+            return { ...item, URL: detail.URL || undefined, _thumbnail_url: detail._thumbnail_url || undefined, Status: detail.Status || item.Status };
           } catch { return item; }
         }
         return item;
@@ -156,11 +164,12 @@ export function AssetsPanel({ tab }: { tab: AssetTab }) {
     setCreating(true);
     try {
       if (tab === 'virtual') {
-        await api.post('/assets/groups', { name: newGroupName.trim(), groupType: 'AIGC' });
+        await api.post('/assets/groups', { name: newGroupName.trim(), groupType: 'AIGC', region: assetRegion });
         setNewGroupName('');
         await loadGroups();
       } else {
-        const res = await api.post<{ session_id: string; h5_link: string }>('/assets/visual-validate/start');
+        const endpoint = validateRegion === 'cn' ? '/assets/visual-validate-cn/start' : '/assets/visual-validate/start';
+        const res = await api.post<{ session_id: string; h5_link: string }>(endpoint);
         setValidateSession({ sessionId: res.session_id, h5Link: res.h5_link });
         setValidatePolling(true);
         pollValidate(res.session_id);
@@ -173,9 +182,10 @@ export function AssetsPanel({ tab }: { tab: AssetTab }) {
   }
 
   async function pollValidate(sessionId: string) {
+    const endpoint = validateRegion === 'cn' ? '/assets/visual-validate-cn' : '/assets/visual-validate';
     const interval = setInterval(async () => {
       try {
-        const res = await api.get<{ status: string; group_id?: string }>(`/assets/visual-validate/${sessionId}`);
+        const res = await api.get<{ status: string; group_id?: string }>(`${endpoint}/${sessionId}`);
         if (res.group_id || res.status === 'completed' || res.status === 'succeeded') {
           clearInterval(interval);
           setValidateSession(null);
@@ -197,7 +207,7 @@ export function AssetsPanel({ tab }: { tab: AssetTab }) {
   async function deleteGroup(groupId: string) {
     if (!confirm('确定删除该资源组？组内所有资源将被删除。')) return;
     try {
-      await api.del(`/assets/groups/${groupId}`);
+      await api.del(`/assets/groups/${groupId}?region=${currentRegion}`);
       await loadGroups();
     } catch {}
   }
@@ -205,7 +215,7 @@ export function AssetsPanel({ tab }: { tab: AssetTab }) {
   async function deleteAsset(assetId: string, groupId: string) {
     if (!confirm('确定删除该资源？')) return;
     try {
-      await api.del(`/assets/item/${assetId}`);
+      await api.del(`/assets/item/${assetId}?region=${currentRegion}`);
       await loadAssets(groupId);
     } catch {}
   }
@@ -231,6 +241,7 @@ export function AssetsPanel({ tab }: { tab: AssetTab }) {
         fileUrl,
         assetType,
         name: file.name,
+        region: currentRegion,
       });
       await loadAssets(groupId);
     } catch (err) {
@@ -361,8 +372,22 @@ export function AssetsPanel({ tab }: { tab: AssetTab }) {
 
         <div className={styles.createRow}>
           {tab === 'virtual' && (
-            <input type="text" placeholder="资源组名称" value={newGroupName}
-              onChange={e => setNewGroupName(e.target.value)} className={styles.input} />
+            <>
+              <select value={assetRegion} onChange={e => setAssetRegion(e.target.value as 'global' | 'cn')}
+                className={styles.input} style={{ width: 'auto', minWidth: 100 }}>
+                <option value="cn">国内站</option>
+                <option value="global">国际站</option>
+              </select>
+              <input type="text" placeholder="资源组名称" value={newGroupName}
+                onChange={e => setNewGroupName(e.target.value)} className={styles.input} />
+            </>
+          )}
+          {tab === 'real' && (
+            <select value={validateRegion} onChange={e => setValidateRegion(e.target.value as 'global' | 'cn')}
+              className={styles.input} style={{ width: 'auto', minWidth: 100 }}>
+              <option value="cn">国内站</option>
+              <option value="global">国际站</option>
+            </select>
           )}
           <button onClick={createGroup} disabled={creating || (tab === 'virtual' && !newGroupName.trim())}
             className={styles.btnPrimary}>
@@ -376,7 +401,7 @@ export function AssetsPanel({ tab }: { tab: AssetTab }) {
             <h3>真人验证</h3>
             <p>请在手机端完成活体验证：</p>
             <div className={styles.qrWrap}>
-              <img src={`/api/assets/visual-validate/${validateSession.sessionId}/qr`} alt="扫码验证" />
+              <img src={`/api/assets/visual-validate${validateRegion === 'cn' ? '-cn' : ''}/${validateSession.sessionId}/qr`} alt="扫码验证" />
             </div>
             <a href={validateSession.h5Link} target="_blank" rel="noopener noreferrer" className={styles.btnGhost}>
               在当前设备打开验证
@@ -426,8 +451,8 @@ export function AssetsPanel({ tab }: { tab: AssetTab }) {
                   <div className={styles.assetGrid}>
                     {(assets[group.Id] || []).map(asset => (
                       <div key={asset.Id} className={styles.assetCard}>
-                        {asset.AssetType === 'Image' && (asset.URL || asset.PreviewUrl) && (
-                          <img src={asset.URL || asset.PreviewUrl} alt="" className={styles.assetThumb} />
+                        {asset.AssetType === 'Image' && (asset.URL || asset._thumbnail_url || asset.PreviewUrl) && (
+                          <img src={asset._thumbnail_url || asset.URL || asset.PreviewUrl} alt="" className={styles.assetThumb} />
                         )}
                         <div className={styles.assetInfo}>
                           <span className={styles.assetType}>{asset.AssetType} · {asset.Status}</span>
