@@ -121,6 +121,11 @@ function getVideoInfo(file: File): Promise<{ duration: number; width: number; he
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
+const SCRIPT_TABS = [
+  { value: 'script'   as const, label: '剧本' },
+  { value: 'subtitle' as const, label: '解说词' },
+];
+
 const MODELS = [
   { value: 'doubao-seedance-2-0',             label: 'Seedance 2.0' },
   { value: 'doubao-seedance-2-0-260128',      label: 'Seedance 2.0 (260128)' },
@@ -1895,8 +1900,7 @@ export default function VoiceoverPage() {
               <div style={{ marginBottom: 16 }}>
                 <p className={styles.cardTitle} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: scriptCollapsed ? 0 : 10 }}>
                   <span onClick={() => setScriptCollapsed(v => !v)} style={{ fontSize: 10, cursor: 'pointer', transition: 'transform 0.2s', transform: scriptCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}>▼</span>
-                  <span onClick={() => { if (!scriptCollapsed) setScriptTab('script'); else setScriptCollapsed(false); }} style={{ cursor: 'pointer', color: scriptTab === 'script' ? '#111827' : '#9ca3af', borderBottom: scriptTab === 'script' ? '2px solid #2563eb' : '2px solid transparent', paddingBottom: 2 }}>剧本</span>
-                  <span onClick={() => { if (!scriptCollapsed) setScriptTab('subtitle'); else setScriptCollapsed(false); }} style={{ cursor: 'pointer', color: scriptTab === 'subtitle' ? '#111827' : '#9ca3af', borderBottom: scriptTab === 'subtitle' ? '2px solid #2563eb' : '2px solid transparent', paddingBottom: 2 }}>解说词</span>
+                  <span onClick={() => setScriptCollapsed(v => !v)} style={{ cursor: 'pointer', color: '#111827' }}>视频概念描述</span>
                   {scriptTab === 'script' && <>
                   <button type="button" onClick={() => setShowExamples(v => !v)}
                     style={{ display: 'inline-flex', alignItems: 'center', gap: 2, background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px', color: '#0d9488', fontSize: 13, fontWeight: 500 }}>
@@ -1925,6 +1929,17 @@ export default function VoiceoverPage() {
                 </p>
 
                   {!scriptCollapsed && (<>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 10 }}>
+                    {SCRIPT_TABS.map(opt => (
+                      <label key={opt.value} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 13, cursor: 'pointer', color: scriptTab === opt.value ? '#111827' : '#6b7280' }}>
+                        <input type="radio" name="scriptTab" value={opt.value} checked={scriptTab === opt.value}
+                          onChange={() => setScriptTab(opt.value)}
+                          style={{ accentColor: '#2563eb', cursor: 'pointer', margin: 0 }} />
+                        {opt.label}
+                      </label>
+                    ))}
+                  </div>
+
                   {scriptTab === 'script' && (<>
                   {showAiInput && (
                     <div style={{ display: 'flex', gap: 6, marginBottom: 10, alignItems: 'center' }}>
@@ -1965,7 +1980,7 @@ export default function VoiceoverPage() {
                     )}
                     <textarea rows={4} value={script}
                       onChange={e => { setScript(e.target.value); setInitResult(null); setShots([]); setMergedVideoUrl(null); }}
-                      placeholder="描述你想要的视频内容…"
+                      placeholder="输入视频概念描述…"
                       className={styles.textarea} style={{ fontFamily: 'inherit', fontSize: 13, border: '2px solid #000' }} />
                   </div>
                   </>)}
