@@ -118,7 +118,7 @@ async function manageRoutes(fastify) {
 
   fastify.get('/billing/summary', async (request, reply) => {
     try {
-      const result = await authFetch('/api/billing/summary')
+      const result = await authFetchCN('/api/billing/summary')
       return { success: true, data: result }
     } catch (err) {
       return reply.code(500).send({ success: false, error: err.message })

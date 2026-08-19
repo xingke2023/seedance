@@ -101,12 +101,11 @@ async function createVideoTask({
 }) {
   const content = []
 
-  if (prompt) {
-    content.push({ type: 'text', text: prompt })
-  }
-
-  if (imageDescriptions) {
-    content.push({ type: 'text', text: imageDescriptions })
+  // 国内站 (vidgen.fidelityai.cn) 不接受 content 里出现多个 type:"text" 块 —
+  // 任务会提交成功但同一秒变 failed,且错误信息被屏蔽。合并成一段文本。
+  const textParts = [prompt, imageDescriptions].filter(Boolean)
+  if (textParts.length > 0) {
+    content.push({ type: 'text', text: textParts.join('\n\n') })
   }
 
   if (orderedMedia && orderedMedia.length > 0) {
