@@ -2042,7 +2042,6 @@ export default function VoiceoverPage() {
                       视频类型由上面的 radio 驱动，概念取自唯一那个 textarea。 */}
                   <StoryboardGenerator
                     concept={conceptText}
-                    onConceptChange={setConceptText}
                     videoType={videoType}
                     open={sbOpen}
                     onOpenChange={setSbOpen}

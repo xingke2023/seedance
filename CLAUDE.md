@@ -186,7 +186,7 @@ voiceover-v3 上「叙事短片 / 解说纪录片」是被提到页面层的生�
 
 ### 前端组件
 
-- `components/library/StoryboardGenerator` — 分镜生成器弹窗。表单字段与 fenjing-script 原版一致：创作目标/整体基调/总时长/镜头数量/叙事结构/视频类型都是 **select**，**option 的 value 是英文短语**（如 `brand storytelling, emotional connection`），会原样拼进 user message 喂给模型 —— 别把它们换成中文自由文本。目标受众和核心信息是自由输入。支持「从港险案例库取材」自动填充概念，生成后先预览再导入分镜表
+- `components/library/StoryboardGenerator` — 分镜生成器弹窗。表单字段与 fenjing-script 原版一致：创作目标/整体基调/总时长/镜头数量/叙事结构/视频类型都是 **select**，**option 的 value 是英文短语**（如 `brand storytelling, emotional connection`），会原样拼进 user message 喂给模型 —— 别把它们换成中文自由文本。目标受众和核心信息是自由输入。生成后先预览再导入分镜表。概念在 voiceover-v3 上由页面那个共享 textarea 提供（受控只读，弹窗里不再重复渲染输入框）；港险案例改从 TopNav 的 `/insurance` 页浏览
 - `components/library/LibraryPanel` — 素材库面板，点击条目把英文片段追加到提示词框
 
 两者都挂在 `/projects/[id]/videos/[videoId]` 编辑器上。

@@ -41,11 +41,6 @@ export interface ShotDraft {
   camera_movement: string;
 }
 
-interface InsuranceCase {
-  id: number; title: string; tags: string[];
-  description: string; insurance_needs: string | null;
-}
-
 // Two orthogonal axes, matching the backend contract:
 //   video_type          叙事短片 story | 解说纪录片 narration — narration wins outright
 //   narrative_structure 自由 free    | 起承转合 qczh        — only meaningful for 叙事短片
@@ -126,13 +121,11 @@ interface Props {
   /** Seeds 视频概念描述 when the host does NOT control it. */
   initialConcept?: string;
   /**
-   * Controlled 视频概念描述. Pass this when the host page already shows a
-   * 视频概念描述 box (voiceover-v3 does) — the panel then drops its own field and
-   * reads/writes the page's, so the concept is never entered twice.
-   * `onConceptChange` is what 从港险案例库取材 writes back through.
+   * Controlled 视频概念描述, read-only. Pass this when the host page already
+   * shows a 视频概念描述 box (voiceover-v3 does) — the panel then drops its own
+   * field entirely and reads the page's, so the concept is never entered twice.
    */
   concept?: string;
-  onConceptChange?: (v: string) => void;
   /**
    * Controls 视频类型 from the parent. Pass this when the host page already has
    * its own 叙事短片/解说纪录片 selector (voiceover-v3 does) so the two can't disagree —
@@ -153,7 +146,7 @@ interface Props {
 
 export default function StoryboardGenerator({
   initialConcept = '', videoType: controlledType,
-  concept: controlledConcept, onConceptChange,
+  concept: controlledConcept,
   open: controlledOpen, onOpenChange, hideTrigger = false, onGenerated,
 }: Props) {
   const [mounted, setMounted] = useState(false);
@@ -172,10 +165,7 @@ export default function StoryboardGenerator({
   const [ownConcept, setOwnConcept] = useState(initialConcept);
   const conceptControlled = controlledConcept !== undefined;
   const concept = conceptControlled ? controlledConcept : ownConcept;
-  const setConcept = (v: string) => {
-    if (!conceptControlled) setOwnConcept(v);
-    onConceptChange?.(v);
-  };
+  const setConcept = (v: string) => { if (!conceptControlled) setOwnConcept(v); };
   const [goal, setGoal]             = useState('');
   const [audience, setAudience]     = useState('');
   const [tone, setTone]             = useState('');
@@ -186,45 +176,6 @@ export default function StoryboardGenerator({
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState('');
   const [preview, setPreview] = useState<{ sb: Storyboard; drafts: ShotDraft[] } | null>(null);
-
-  // 港险案例取材
-  const [casesOpen, setCasesOpen] = useState(false);
-  const [caseQuery, setCaseQuery] = useState('');
-  const [cases, setCases]         = useState<InsuranceCase[] | null>(null);
-  const [casesLoading, setCasesLoading] = useState(false);
-
-  const searchCases = useCallback(async (q: string) => {
-    setCasesLoading(true);
-    try {
-      const res = await api.get<{ Items: InsuranceCase[] }>(
-        `/library/cases?page_size=15${q ? `&q=${encodeURIComponent(q)}` : ''}`
-      );
-      setCases(res.Items || []);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '案例检索失败');
-    } finally {
-      setCasesLoading(false);
-    }
-  }, []);
-
-  function openCases() {
-    const next = !casesOpen;
-    setCasesOpen(next);
-    if (next && !cases) searchCases('');
-  }
-
-  async function pickCase(c: InsuranceCase) {
-    try {
-      const full = await api.get<InsuranceCase & { content?: string; budget_suggestion?: string }>(`/library/cases/${c.id}`);
-      setConcept(full.description || c.description || c.title);
-      if (!keyMessages && full.insurance_needs) setKeyMsg(full.insurance_needs);
-      if (!audience && full.tags?.length) setAudience(full.tags.join('、'));
-      setVideoType('narration'); // 案例讲解天然适配解说纪录片
-      setCasesOpen(false);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '案例读取失败');
-    }
-  }
 
   async function generate() {
     if (!concept.trim()) { setError('请输入视频概念描述'); return; }
@@ -307,52 +258,11 @@ export default function StoryboardGenerator({
         </div>
 
         <div className={styles.dialogBody}>
-            {conceptControlled ? (
-              // The page's own 视频概念描述 box is the single source — don't ask twice.
-              <div className={styles.conceptRef}>
-                <span className={styles.conceptRefLabel}>
-                  概念取自上方「视频概念描述」
-                  {!concept.trim() && <span className={styles.conceptRefWarn}>（尚未填写）</span>}
-                </span>
-                <button type="button" className={styles.linkBtn} onClick={openCases}>
-                  {casesOpen ? '收起案例库' : '从港险案例库取材'}
-                </button>
-              </div>
-            ) : (
+            {!conceptControlled && (
               <div className={styles.field}>
-                <div className={styles.fieldHead}>
-                  <label>视频概念描述 <span className={styles.req}>*</span></label>
-                  <button type="button" className={styles.linkBtn} onClick={openCases}>
-                    {casesOpen ? '收起案例库' : '从港险案例库取材'}
-                  </button>
-                </div>
+                <label>视频概念描述 <span className={styles.req}>*</span></label>
                 <textarea rows={3} value={concept} onChange={e => setConcept(e.target.value)}
                   placeholder="这条视频要讲什么？例如：一位年轻插画师在雨天的咖啡馆里完成一幅画" />
-              </div>
-            )}
-
-            {casesOpen && (
-              <div className={styles.cases}>
-                <div className={styles.caseSearch}>
-                  <input value={caseQuery} onChange={e => setCaseQuery(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter') searchCases(caseQuery); }}
-                    placeholder="搜索案例标题或描述，回车检索" />
-                  <button type="button" onClick={() => searchCases(caseQuery)}>搜索</button>
-                </div>
-                {casesLoading && <div className={styles.status}>检索中…</div>}
-                <div className={styles.caseList}>
-                  {(cases || []).map(c => (
-                    <button key={c.id} type="button" className={styles.caseItem} onClick={() => pickCase(c)}>
-                      <span className={styles.caseTitle}>{c.title}</span>
-                      {c.tags?.length > 0 && (
-                        <span className={styles.caseTags}>{c.tags.slice(0, 3).join(' · ')}</span>
-                      )}
-                    </button>
-                  ))}
-                  {!casesLoading && cases && cases.length === 0 && (
-                    <div className={styles.status}>没有匹配的案例</div>
-                  )}
-                </div>
               </div>
             )}
 
