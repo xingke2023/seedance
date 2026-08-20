@@ -1060,14 +1060,27 @@ export default function VoiceoverPage() {
   const [scriptCollapsed, setScriptCollapsed] = useState(false);
   const [sbOpen, setSbOpen] = useState(false);
 
-  // 视频类型决定那唯一一个 textarea 写进哪个字段：
-  // 叙事短片 → script（视频概念描述）；解说纪录片 → subtitleInput（字幕/解说词）
-  const conceptText = videoType === 'narration' ? subtitleInput : script;
+  // 唯一那个 textarea 始终写 script，两种视频类型共用同一份文本。
+  // 选解说纪录片时把它镜像进 subtitleInput —— 那份文本本身就是字幕/解说词。
+  const conceptText = script;
   const setConceptText = (v: string) => {
+    setScript(v);
     if (videoType === 'narration') { setSubtitleInput(v); setAudioUrl(null); }
-    else setScript(v);
     setInitResult(null); setShots([]); setMergedVideoUrl(null);
   };
+  // 只在「切换到解说纪录片」那一刻同步一次。若也跟着 script 变化跑，会把分镜
+  // 导入写进 subtitleInput 的字幕又覆盖回去；日常输入由 setConceptText 负责镜像。
+  const prevVideoTypeRef = useRef(videoType);
+  useEffect(() => {
+    const prev = prevVideoTypeRef.current;
+    prevVideoTypeRef.current = videoType;
+    if (prev !== 'narration' && videoType === 'narration') {
+      setSubtitleInput(script);
+      setAudioUrl(null);
+    }
+    // 切回叙事短片时不清 subtitleInput —— 那里可能是分镜生成出来的字幕
+  }, [videoType, script]);
+
   const [dirtyShotIdxs, setDirtyShotIdxs] = useState<Set<number>>(new Set());
   const [videoDirty, setVideoDirty] = useState(false);
   const [savingShots, setSavingShots] = useState(false);
