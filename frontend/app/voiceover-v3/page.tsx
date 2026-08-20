@@ -1951,7 +1951,7 @@ export default function VoiceoverPage() {
                     style={{ fontSize: 11, padding: '2px 8px', border: '1px solid #6b7280', borderRadius: 5, background: '#fff', cursor: 'pointer', color: '#374151' }}>
                     AI辅助填写
                   </button>
-                  <button type="button" onClick={() => { setSbOpen(v => !v); setScriptCollapsed(false); }}
+                  <button type="button" onClick={() => setSbOpen(v => !v)}
                     style={{ fontSize: 11, padding: '2px 8px', border: '1px solid #2563eb', borderRadius: 5, background: sbOpen ? '#eff6ff' : '#fff', cursor: 'pointer', color: '#2563eb', fontWeight: 500, whiteSpace: 'nowrap' }}>
                     🎬 专业分镜生成
                   </button>
@@ -2013,8 +2013,8 @@ export default function VoiceoverPage() {
                       className={styles.textarea} style={{ fontFamily: 'inherit', fontSize: 13, border: '2px solid #000' }} />
                   </div>
 
-                  {/* 视频类型由上面的 radio 驱动，概念取自唯一那个 textarea；
-                      触发按钮在标题行的 <p> 里，面板不能嵌进去，所以在这里受控渲染。 */}
+                  {/* 弹窗经 portal 挂到 body，这里只是受控挂载点；
+                      视频类型由上面的 radio 驱动，概念取自唯一那个 textarea。 */}
                   <StoryboardGenerator
                     concept={script}
                     onConceptChange={v => {

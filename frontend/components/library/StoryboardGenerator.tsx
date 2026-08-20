@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { api } from '@/lib/api';
 import styles from './StoryboardGenerator.module.css';
 
@@ -117,6 +118,9 @@ export default function StoryboardGenerator({
   concept: controlledConcept, onConceptChange,
   open: controlledOpen, onOpenChange, hideTrigger = false, onGenerated,
 }: Props) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
   const [ownOpen, setOwnOpen] = useState(false);
   const open = controlledOpen ?? ownOpen;
   const setOpen = (v: boolean) => { if (controlledOpen === undefined) setOwnOpen(v); onOpenChange?.(v); };
@@ -246,6 +250,156 @@ export default function StoryboardGenerator({
     if (!ownConcept.trim() && initialConcept.trim()) setOwnConcept(initialConcept);
   }, [open, conceptControlled, ownConcept, initialConcept]);
 
+  // Esc to close + body scroll lock while the dialog is up.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('keydown', onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [open]);
+
+  const dialog = (
+    <div className={styles.backdrop}
+      onMouseDown={e => { if (e.target === e.currentTarget) setOpen(false); }}>
+      <div className={styles.dialog} role="dialog" aria-modal="true" aria-label="专业分镜生成">
+        <div className={styles.dialogHead}>
+          <span className={styles.dialogTitle}>🎬 专业分镜生成</span>
+          <button type="button" className={styles.close} onClick={() => setOpen(false)} aria-label="关闭">×</button>
+        </div>
+
+        <div className={styles.dialogBody}>
+            {!controlled && (
+            <div className={styles.axis}>
+              <span className={styles.axisLabel}>视频类型</span>
+              <div className={styles.structRow}>
+                {VIDEO_TYPES.map(v => (
+                  <label key={v.value} className={`${styles.struct} ${videoType === v.value ? styles.structActive : ''}`}>
+                    <input type="radio" name="sbVideoType" value={v.value}
+                      checked={videoType === v.value}
+                      onChange={() => setVideoType(v.value)} />
+                    <span className={styles.structLabel}>{v.label}</span>
+                    <span className={styles.structDesc}>{v.desc}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            )}
+
+            {videoType === 'story' && (
+              <div className={styles.axis}>
+                <span className={styles.axisLabel}>叙事结构</span>
+                <div className={styles.structRow}>
+                  {NARRATIVES.map(n => (
+                    <label key={n.value} className={`${styles.struct} ${narrative === n.value ? styles.structActive : ''}`}>
+                      <input type="radio" name="sbNarrative" value={n.value}
+                        checked={narrative === n.value}
+                        onChange={() => setNarrative(n.value)} />
+                      <span className={styles.structLabel}>{n.label}</span>
+                      <span className={styles.structDesc}>{n.desc}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {conceptControlled ? (
+              // The page's own 视频概念描述 box is the single source — don't ask twice.
+              <div className={styles.conceptRef}>
+                <span className={styles.conceptRefLabel}>
+                  概念取自上方「视频概念描述」
+                  {!concept.trim() && <span className={styles.conceptRefWarn}>（尚未填写）</span>}
+                </span>
+                <button type="button" className={styles.linkBtn} onClick={openCases}>
+                  {casesOpen ? '收起案例库' : '从港险案例库取材'}
+                </button>
+              </div>
+            ) : (
+              <div className={styles.field}>
+                <div className={styles.fieldHead}>
+                  <label>视频概念描述 <span className={styles.req}>*</span></label>
+                  <button type="button" className={styles.linkBtn} onClick={openCases}>
+                    {casesOpen ? '收起案例库' : '从港险案例库取材'}
+                  </button>
+                </div>
+                <textarea rows={3} value={concept} onChange={e => setConcept(e.target.value)}
+                  placeholder="这条视频要讲什么？例如：一位年轻插画师在雨天的咖啡馆里完成一幅画" />
+              </div>
+            )}
+
+            {casesOpen && (
+              <div className={styles.cases}>
+                <div className={styles.caseSearch}>
+                  <input value={caseQuery} onChange={e => setCaseQuery(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') searchCases(caseQuery); }}
+                    placeholder="搜索案例标题或描述，回车检索" />
+                  <button type="button" onClick={() => searchCases(caseQuery)}>搜索</button>
+                </div>
+                {casesLoading && <div className={styles.status}>检索中…</div>}
+                <div className={styles.caseList}>
+                  {(cases || []).map(c => (
+                    <button key={c.id} type="button" className={styles.caseItem} onClick={() => pickCase(c)}>
+                      <span className={styles.caseTitle}>{c.title}</span>
+                      {c.tags?.length > 0 && (
+                        <span className={styles.caseTags}>{c.tags.slice(0, 3).join(' · ')}</span>
+                      )}
+                    </button>
+                  ))}
+                  {!casesLoading && cases && cases.length === 0 && (
+                    <div className={styles.status}>没有匹配的案例</div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            <div className={styles.grid2}>
+              <div className={styles.field}><label>创作目标</label>
+                <input value={goal} onChange={e => setGoal(e.target.value)} placeholder="想让观众获得什么" /></div>
+              <div className={styles.field}><label>目标受众</label>
+                <input value={audience} onChange={e => setAudience(e.target.value)} placeholder="给谁看" /></div>
+              <div className={styles.field}><label>整体基调</label>
+                <input value={tone} onChange={e => setTone(e.target.value)} placeholder="温暖 / 悬念 / 专业…" /></div>
+              <div className={styles.field}><label>核心信息</label>
+                <input value={keyMessages} onChange={e => setKeyMsg(e.target.value)} placeholder="必须传达的要点" /></div>
+              <div className={styles.field}><label>镜头数</label>
+                <input type="number" min={1} max={20} value={shotCount}
+                  onChange={e => setShotCount(Math.min(20, Math.max(1, parseInt(e.target.value, 10) || 1)))} />
+                {videoType === 'story' && narrative === 'qczh' && shotCount < 4 && (
+                  <span className={styles.note}>起承转合至少 4 个镜头，后端会自动补足</span>
+                )}
+              </div>
+              <div className={styles.field}><label>总时长</label>
+                <input value={durationTotal} onChange={e => setDurTotal(e.target.value)} placeholder="如 30s（可留空）" /></div>
+            </div>
+
+              {preview && (
+                <button type="button" className={styles.apply} onClick={applyPreview} disabled={loading}>
+                  导入 {preview.drafts.length} 个分镜
+                </button>
+              )}
+        </div>
+
+        <div className={styles.dialogFoot}>
+            {error && <div className={styles.errorBox}>{error}</div>}
+            <div className={styles.actions}>
+              <button type="button" className={styles.primary} onClick={generate} disabled={loading || !concept.trim()}>
+                {loading ? '生成中…' : preview ? '重新生成' : '生成分镜脚本'}
+              </button>
+              {preview && (
+                <button type="button" className={styles.apply} onClick={applyPreview} disabled={loading}>
+                  导入 {preview.drafts.length} 个分镜
+                </button>
+              )}
+            </div>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div className={styles.wrap}>
       {!hideTrigger && (
@@ -253,149 +407,8 @@ export default function StoryboardGenerator({
           🎬 专业分镜生成
         </button>
       )}
-
-      {open && (
-        <div className={styles.panel}>
-          {!controlled && (
-          <div className={styles.axis}>
-            <span className={styles.axisLabel}>视频类型</span>
-            <div className={styles.structRow}>
-              {VIDEO_TYPES.map(v => (
-                <label key={v.value} className={`${styles.struct} ${videoType === v.value ? styles.structActive : ''}`}>
-                  <input type="radio" name="sbVideoType" value={v.value}
-                    checked={videoType === v.value}
-                    onChange={() => setVideoType(v.value)} />
-                  <span className={styles.structLabel}>{v.label}</span>
-                  <span className={styles.structDesc}>{v.desc}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-          )}
-
-          {videoType === 'story' && (
-            <div className={styles.axis}>
-              <span className={styles.axisLabel}>叙事结构</span>
-              <div className={styles.structRow}>
-                {NARRATIVES.map(n => (
-                  <label key={n.value} className={`${styles.struct} ${narrative === n.value ? styles.structActive : ''}`}>
-                    <input type="radio" name="sbNarrative" value={n.value}
-                      checked={narrative === n.value}
-                      onChange={() => setNarrative(n.value)} />
-                    <span className={styles.structLabel}>{n.label}</span>
-                    <span className={styles.structDesc}>{n.desc}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {conceptControlled ? (
-            // The page's own 视频概念描述 box is the single source — don't ask twice.
-            <div className={styles.conceptRef}>
-              <span className={styles.conceptRefLabel}>
-                概念取自上方「视频概念描述」
-                {!concept.trim() && <span className={styles.conceptRefWarn}>（尚未填写）</span>}
-              </span>
-              <button type="button" className={styles.linkBtn} onClick={openCases}>
-                {casesOpen ? '收起案例库' : '从港险案例库取材'}
-              </button>
-            </div>
-          ) : (
-            <div className={styles.field}>
-              <div className={styles.fieldHead}>
-                <label>视频概念描述 <span className={styles.req}>*</span></label>
-                <button type="button" className={styles.linkBtn} onClick={openCases}>
-                  {casesOpen ? '收起案例库' : '从港险案例库取材'}
-                </button>
-              </div>
-              <textarea rows={3} value={concept} onChange={e => setConcept(e.target.value)}
-                placeholder="这条视频要讲什么？例如：一位年轻插画师在雨天的咖啡馆里完成一幅画" />
-            </div>
-          )}
-
-          {casesOpen && (
-            <div className={styles.cases}>
-              <div className={styles.caseSearch}>
-                <input value={caseQuery} onChange={e => setCaseQuery(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter') searchCases(caseQuery); }}
-                  placeholder="搜索案例标题或描述，回车检索" />
-                <button type="button" onClick={() => searchCases(caseQuery)}>搜索</button>
-              </div>
-              {casesLoading && <div className={styles.status}>检索中…</div>}
-              <div className={styles.caseList}>
-                {(cases || []).map(c => (
-                  <button key={c.id} type="button" className={styles.caseItem} onClick={() => pickCase(c)}>
-                    <span className={styles.caseTitle}>{c.title}</span>
-                    {c.tags?.length > 0 && (
-                      <span className={styles.caseTags}>{c.tags.slice(0, 3).join(' · ')}</span>
-                    )}
-                  </button>
-                ))}
-                {!casesLoading && cases && cases.length === 0 && (
-                  <div className={styles.status}>没有匹配的案例</div>
-                )}
-              </div>
-            </div>
-          )}
-
-          <div className={styles.grid2}>
-            <div className={styles.field}><label>创作目标</label>
-              <input value={goal} onChange={e => setGoal(e.target.value)} placeholder="想让观众获得什么" /></div>
-            <div className={styles.field}><label>目标受众</label>
-              <input value={audience} onChange={e => setAudience(e.target.value)} placeholder="给谁看" /></div>
-            <div className={styles.field}><label>整体基调</label>
-              <input value={tone} onChange={e => setTone(e.target.value)} placeholder="温暖 / 悬念 / 专业…" /></div>
-            <div className={styles.field}><label>核心信息</label>
-              <input value={keyMessages} onChange={e => setKeyMsg(e.target.value)} placeholder="必须传达的要点" /></div>
-            <div className={styles.field}><label>镜头数</label>
-              <input type="number" min={1} max={20} value={shotCount}
-                onChange={e => setShotCount(Math.min(20, Math.max(1, parseInt(e.target.value, 10) || 1)))} />
-              {videoType === 'story' && narrative === 'qczh' && shotCount < 4 && (
-                <span className={styles.note}>起承转合至少 4 个镜头，后端会自动补足</span>
-              )}
-            </div>
-            <div className={styles.field}><label>总时长</label>
-              <input value={durationTotal} onChange={e => setDurTotal(e.target.value)} placeholder="如 30s（可留空）" /></div>
-          </div>
-
-          {error && <div className={styles.errorBox}>{error}</div>}
-
-          <div className={styles.actions}>
-            <button type="button" className={styles.primary} onClick={generate} disabled={loading || !concept.trim()}>
-              {loading ? '生成中…' : preview ? '重新生成' : '生成分镜脚本'}
-            </button>
-            {preview && (
-              <button type="button" className={styles.apply} onClick={applyPreview} disabled={loading}>
-                导入 {preview.drafts.length} 个分镜
-              </button>
-            )}
-          </div>
-
-          {preview && (
-            <div className={styles.preview}>
-              {preview.sb.title && <div className={styles.pvTitle}>{preview.sb.title}
-                {preview.sb.total_duration && <span className={styles.pvDur}>{preview.sb.total_duration}</span>}</div>}
-              {preview.sb.narrative_summary && <div className={styles.pvSummary}>{preview.sb.narrative_summary}</div>}
-              <ol className={styles.pvList}>
-                {preview.drafts.map((d, i) => (
-                  <li key={i} className={styles.pvShot}>
-                    <div className={styles.pvHead}>
-                      <span className={styles.pvNum}>{i + 1}</span>
-                      {d.shot_type && <span className={styles.pvTag}>{d.shot_type}</span>}
-                      {d.camera_movement && <span className={styles.pvTag}>{d.camera_movement}</span>}
-                      <span className={styles.pvTag}>{d.duration}s</span>
-                    </div>
-                    <div className={styles.pvDesc}>{d.description}</div>
-                    {d.subtitle && <div className={styles.pvNarration}>🎙 {d.subtitle}</div>}
-                    <div className={styles.pvPrompt}>{d.prompt}</div>
-                  </li>
-                ))}
-              </ol>
-            </div>
-          )}
-        </div>
-      )}
+      {/* Portalled so page-level sticky headers / overflow containers can't clip it. */}
+      {mounted && open && createPortal(dialog, document.body)}
     </div>
   );
 }
