@@ -37,29 +37,15 @@
   padding: 12px 18px; border-top: 1px solid #e5e7eb; background: #fff;
 }
 
-/* ── axes ─────────────────────────────────────────────────────────── */
-.axis { margin-bottom: 12px; }
-.axisLabel { display: block; font-size: 12px; color: #6b7280; margin-bottom: 6px; }
-.structRow { display: flex; gap: 8px; flex-wrap: wrap; }
-
-.struct {
-  flex: 1; min-width: 200px; display: flex; flex-direction: column; gap: 2px;
-  padding: 9px 11px; border: 1.5px solid #e5e7eb; border-radius: 8px;
-  background: #fff; cursor: pointer;
-}
-.struct input { display: none; }
-.structActive { border-color: #2563eb; background: #eff6ff; }
-.structLabel { font-size: 13px; font-weight: 600; color: #111827; }
-.structDesc { font-size: 11px; color: #6b7280; line-height: 1.5; }
-
 /* ── fields ───────────────────────────────────────────────────────── */
 .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
 .field label { font-size: 12px; color: #6b7280; }
-.field input, .field textarea {
+.field input, .field textarea, .field select {
   font-family: inherit; font-size: 13px; padding: 6px 9px;
   border: 1px solid #d1d5db; border-radius: 6px; outline: none; background: #fff; width: 100%;
 }
-.field input:focus, .field textarea:focus { border-color: #2563eb; }
+.field select { cursor: pointer; height: 32px; }
+.field input:focus, .field textarea:focus, .field select:focus { border-color: #2563eb; }
 .field textarea { resize: vertical; }
 .req { color: #dc2626; }
 .note { font-size: 11px; color: #b45309; }
@@ -70,7 +56,13 @@
   font-size: 12px; color: #0d9488; text-decoration: underline;
 }
 
-.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+/* Auto-fill so the short selects pack several to a row; the two free-text
+   fields span two columns each. */
+.fieldGrid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 0 12px;
+}
+.fieldWide { grid-column: span 2; }
 
 /* ── 港险案例取材 ─────────────────────────────────────────────────── */
 .cases { margin-bottom: 12px; border: 1px solid #e5e7eb; border-radius: 8px; background: #fff; padding: 10px; }
@@ -135,7 +127,8 @@
 }
 
 @media (max-width: 768px) {
-  .grid2 { grid-template-columns: 1fr; }
+  .fieldGrid { grid-template-columns: 1fr 1fr; }
+  .fieldWide { grid-column: span 2; }
   .struct { min-width: 100%; }
   /* Full-bleed sheet on phones — a centred card wastes most of the screen. */
   .backdrop { padding: 0; align-items: stretch; }

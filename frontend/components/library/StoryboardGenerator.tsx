@@ -52,14 +52,52 @@ interface InsuranceCase {
 export type VideoType = 'story' | 'narration';
 export type Narrative = 'free' | 'qczh';
 
-const VIDEO_TYPES: { value: VideoType; label: string; desc: string }[] = [
-  { value: 'story',     label: '叙事短片',   desc: '画面叙事，每镜产出英文提示词与首末帧' },
-  { value: 'narration', label: '解说纪录片', desc: '全程旁白配音 + B-roll 画面，每镜产出可直接配音的文案' },
+const VIDEO_TYPES: { value: VideoType; label: string }[] = [
+  { value: 'story',     label: '叙事短片（画面驱动叙事）' },
+  { value: 'narration', label: '解说纪录片（旁白+字幕+B-roll）' },
 ];
 
-const NARRATIVES: { value: Narrative; label: string; desc: string }[] = [
-  { value: 'free', label: '自由分镜', desc: '开头钩子 → 中段发展 → 结尾收束' },
-  { value: 'qczh', label: '起承转合', desc: '古典四段结构，「转」是记忆点，「合」呼应「起」' },
+// Option values are the English phrases the original app fed straight into the
+// prompt (创作目标：brand storytelling, …) — keep them English, the model uses them.
+const CREATIVE_GOALS: { value: string; label: string }[] = [
+  { value: '',                                                    label: '-- 选择目标 --' },
+  { value: 'brand storytelling, emotional connection',            label: '品牌故事/情感共鸣' },
+  { value: 'product showcase, highlight features',                label: '产品展示/功能演示' },
+  { value: 'documentary narrative, authentic',                    label: '纪录片叙事/真实记录' },
+  { value: 'advertisement, hook viewer, drive conversion',        label: '广告/钩子+转化' },
+  { value: 'artistic expression, visual poetry',                  label: '艺术表达/视觉诗意' },
+  { value: 'social media short, fast paced',                      label: '社交媒体短视频/快节奏' },
+];
+
+const TONES: { value: string; label: string }[] = [
+  { value: '',                          label: '-- 选择基调 --' },
+  { value: 'cinematic and emotional',   label: '电影感·情感' },
+  { value: 'energetic and dynamic',     label: '活力·动感' },
+  { value: 'calm and contemplative',    label: '宁静·沉思' },
+  { value: 'epic and grand',            label: '史诗·宏大' },
+  { value: 'warm and nostalgic',        label: '温暖·怀旧' },
+  { value: 'dark and mysterious',       label: '暗黑·神秘' },
+  { value: 'bright and commercial',     label: '明亮·商业感' },
+];
+
+const DURATIONS: { value: string; label: string }[] = [
+  { value: '15s', label: '15秒（3-4个镜头）' },
+  { value: '30s', label: '30秒（5-6个镜头）' },
+  { value: '60s', label: '60秒（8-10个镜头）' },
+  { value: '90s', label: '90秒（12个镜头）' },
+];
+
+const SHOT_COUNTS: { value: number; label: string }[] = [
+  { value: 3, label: '3个镜头' },
+  { value: 4, label: '4个镜头（起承转合推荐）' },
+  { value: 5, label: '5个镜头' },
+  { value: 6, label: '6个镜头' },
+  { value: 8, label: '8个镜头' },
+];
+
+const NARRATIVES: { value: Narrative; label: string }[] = [
+  { value: 'free', label: '自由结构（AI 自由创作）' },
+  { value: 'qczh', label: '起承转合（经典四段式叙事）' },
 ];
 
 /** "5s" / "8-10s" / "约5秒" → a number the shots table can store. */
@@ -143,7 +181,7 @@ export default function StoryboardGenerator({
   const [tone, setTone]             = useState('');
   const [keyMessages, setKeyMsg]    = useState('');
   const [shotCount, setShotCount]   = useState(5);
-  const [durationTotal, setDurTotal] = useState('');
+  const [durationTotal, setDurTotal] = useState('30s');
 
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState('');
@@ -273,40 +311,6 @@ export default function StoryboardGenerator({
         </div>
 
         <div className={styles.dialogBody}>
-            {!controlled && (
-            <div className={styles.axis}>
-              <span className={styles.axisLabel}>视频类型</span>
-              <div className={styles.structRow}>
-                {VIDEO_TYPES.map(v => (
-                  <label key={v.value} className={`${styles.struct} ${videoType === v.value ? styles.structActive : ''}`}>
-                    <input type="radio" name="sbVideoType" value={v.value}
-                      checked={videoType === v.value}
-                      onChange={() => setVideoType(v.value)} />
-                    <span className={styles.structLabel}>{v.label}</span>
-                    <span className={styles.structDesc}>{v.desc}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-            )}
-
-            {videoType === 'story' && (
-              <div className={styles.axis}>
-                <span className={styles.axisLabel}>叙事结构</span>
-                <div className={styles.structRow}>
-                  {NARRATIVES.map(n => (
-                    <label key={n.value} className={`${styles.struct} ${narrative === n.value ? styles.structActive : ''}`}>
-                      <input type="radio" name="sbNarrative" value={n.value}
-                        checked={narrative === n.value}
-                        onChange={() => setNarrative(n.value)} />
-                      <span className={styles.structLabel}>{n.label}</span>
-                      <span className={styles.structDesc}>{n.desc}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-            )}
-
             {conceptControlled ? (
               // The page's own 视频概念描述 box is the single source — don't ask twice.
               <div className={styles.conceptRef}>
@@ -356,24 +360,50 @@ export default function StoryboardGenerator({
               </div>
             )}
 
-            <div className={styles.grid2}>
+            <div className={styles.fieldGrid}>
+              {!controlled && (
+                <div className={styles.field}><label>视频类型</label>
+                  <select value={videoType} onChange={e => setVideoType(e.target.value as VideoType)}>
+                    {VIDEO_TYPES.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
+                </div>
+              )}
+              {videoType === 'story' && (
+                <div className={styles.field}><label>叙事结构</label>
+                  <select value={narrative} onChange={e => setNarrative(e.target.value as Narrative)}>
+                    {NARRATIVES.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
+                </div>
+              )}
               <div className={styles.field}><label>创作目标</label>
-                <input value={goal} onChange={e => setGoal(e.target.value)} placeholder="想让观众获得什么" /></div>
-              <div className={styles.field}><label>目标受众</label>
-                <input value={audience} onChange={e => setAudience(e.target.value)} placeholder="给谁看" /></div>
+                <select value={goal} onChange={e => setGoal(e.target.value)}>
+                  {CREATIVE_GOALS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </div>
               <div className={styles.field}><label>整体基调</label>
-                <input value={tone} onChange={e => setTone(e.target.value)} placeholder="温暖 / 悬念 / 专业…" /></div>
-              <div className={styles.field}><label>核心信息</label>
-                <input value={keyMessages} onChange={e => setKeyMsg(e.target.value)} placeholder="必须传达的要点" /></div>
-              <div className={styles.field}><label>镜头数</label>
-                <input type="number" min={1} max={20} value={shotCount}
-                  onChange={e => setShotCount(Math.min(20, Math.max(1, parseInt(e.target.value, 10) || 1)))} />
-                {videoType === 'story' && narrative === 'qczh' && shotCount < 4 && (
-                  <span className={styles.note}>起承转合至少 4 个镜头，后端会自动补足</span>
-                )}
+                <select value={tone} onChange={e => setTone(e.target.value)}>
+                  {TONES.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
               </div>
               <div className={styles.field}><label>总时长</label>
-                <input value={durationTotal} onChange={e => setDurTotal(e.target.value)} placeholder="如 30s（可留空）" /></div>
+                <select value={durationTotal} onChange={e => setDurTotal(e.target.value)}>
+                  {DURATIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </div>
+              <div className={styles.field}><label>镜头数量</label>
+                <select value={shotCount} onChange={e => setShotCount(parseInt(e.target.value, 10))}>
+                  {SHOT_COUNTS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+                {videoType === 'story' && narrative === 'qczh' && shotCount < 4 && (
+                  <span className={styles.note}>起承转合至少 4 镜，后端会补足</span>
+                )}
+              </div>
+              <div className={`${styles.field} ${styles.fieldWide}`}><label>目标受众</label>
+                <input value={audience} onChange={e => setAudience(e.target.value)}
+                  placeholder="例：25-35岁都市女性，热爱生活方式内容" /></div>
+              <div className={`${styles.field} ${styles.fieldWide}`}><label>核心信息/卖点</label>
+                <input value={keyMessages} onChange={e => setKeyMsg(e.target.value)}
+                  placeholder="例：品质感、自然材质、匠心工艺" /></div>
             </div>
 
               {preview && (
