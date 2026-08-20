@@ -2051,6 +2051,8 @@ export default function VoiceoverPage() {
                   />
                   </>)}
 
+                {/* 配音区只在解说纪录片下出现 —— 叙事短片的字幕为空，没有可配音的文本 */}
+                {videoType === 'narration' && (<>
                 {/* 配音（可选）— 字幕文本来自上面那个共享 textarea，这里只做音色和 TTS */}
                 <div style={{ marginBottom: 14 }}>
                   <p className={styles.cardTitle} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
@@ -2079,6 +2081,7 @@ export default function VoiceoverPage() {
                     )}
                   </div>
                 </div>
+                </>)}
 
                   {/* 剧本分析按钮 */}
                   <div style={{ marginTop: 10, marginBottom: 6 }}>
