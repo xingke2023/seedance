@@ -1059,6 +1059,15 @@ export default function VoiceoverPage() {
   const [mediaCollapsed, setMediaCollapsed] = useState(false);
   const [scriptCollapsed, setScriptCollapsed] = useState(false);
   const [sbOpen, setSbOpen] = useState(false);
+
+  // 视频类型决定那唯一一个 textarea 写进哪个字段：
+  // 叙事短片 → script（视频概念描述）；解说纪录片 → subtitleInput（字幕/解说词）
+  const conceptText = videoType === 'narration' ? subtitleInput : script;
+  const setConceptText = (v: string) => {
+    if (videoType === 'narration') { setSubtitleInput(v); setAudioUrl(null); }
+    else setScript(v);
+    setInitResult(null); setShots([]); setMergedVideoUrl(null);
+  };
   const [dirtyShotIdxs, setDirtyShotIdxs] = useState<Set<number>>(new Set());
   const [videoDirty, setVideoDirty] = useState(false);
   const [savingShots, setSavingShots] = useState(false);
@@ -2000,27 +2009,25 @@ export default function VoiceoverPage() {
                     </div>
                   )}
 
+                  {/* 一个 textarea 两种身份：叙事短片下是概念描述，解说纪录片下就是字幕/解说词 */}
                   <div style={{ position: 'relative', marginBottom: 10 }}>
-                    {script.trim() && (
-                      <button type="button" onClick={() => { setScript(''); setInitResult(null); setShots([]); setMergedVideoUrl(null); }}
+                    {conceptText.trim() && (
+                      <button type="button" onClick={() => setConceptText('')}
                         style={{ position: 'absolute', top: 6, right: 8, zIndex: 1, background: 'none', border: 'none', fontSize: 12, color: '#9ca3af', cursor: 'pointer' }}>
                         清空
                       </button>
                     )}
-                    <textarea rows={4} value={script}
-                      onChange={e => { setScript(e.target.value); setInitResult(null); setShots([]); setMergedVideoUrl(null); }}
-                      placeholder="输入视频概念描述…"
+                    <textarea rows={4} value={conceptText}
+                      onChange={e => setConceptText(e.target.value)}
+                      placeholder={videoType === 'narration' ? '输入解说词/字幕文本，将按分镜拆分并在视频中显示…' : '输入视频概念描述…'}
                       className={styles.textarea} style={{ fontFamily: 'inherit', fontSize: 13, border: '2px solid #000' }} />
                   </div>
 
                   {/* 弹窗经 portal 挂到 body，这里只是受控挂载点；
                       视频类型由上面的 radio 驱动，概念取自唯一那个 textarea。 */}
                   <StoryboardGenerator
-                    concept={script}
-                    onConceptChange={v => {
-                      // 从案例库取材时回写到概念框；和手改一样，作废已生成的分镜
-                      setScript(v); setInitResult(null); setShots([]); setMergedVideoUrl(null);
-                    }}
+                    concept={conceptText}
+                    onConceptChange={setConceptText}
                     videoType={videoType}
                     open={sbOpen}
                     onOpenChange={setSbOpen}
@@ -2029,10 +2036,10 @@ export default function VoiceoverPage() {
                   />
                   </>)}
 
-                {/* 字幕 / 配音（可选）— 独立于视频类型；解说纪录片生成的旁白会落进这里 */}
+                {/* 配音（可选）— 字幕文本来自上面那个共享 textarea，这里只做音色和 TTS */}
                 <div style={{ marginBottom: 14 }}>
                   <p className={styles.cardTitle} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-                    <span>字幕 / 配音（可选）</span>
+                    <span>配音（可选）</span>
                     <span style={{ position: 'relative', display: 'inline-block' }}>
                       <span onClick={() => setShowSubtitleTip(v => !v)} style={{ fontSize: 11, fontWeight: 400, textDecoration: 'underline', cursor: 'pointer', color: '#6b7280' }}>说明</span>
                       {showSubtitleTip && (
@@ -2043,18 +2050,6 @@ export default function VoiceoverPage() {
                       )}
                     </span>
                   </p>
-                  <div style={{ position: 'relative', marginBottom: 10 }}>
-                    {subtitleInput.trim() && (
-                      <button type="button" onClick={() => { setSubtitleInput(''); setInitResult(null); setShots([]); setMergedVideoUrl(null); }}
-                        style={{ position: 'absolute', top: 6, right: 8, zIndex: 1, background: 'none', border: 'none', fontSize: 12, color: '#9ca3af', cursor: 'pointer' }}>
-                        清空
-                      </button>
-                    )}
-                    <textarea rows={3} value={subtitleInput}
-                      onChange={e => { setSubtitleInput(e.target.value); setAudioUrl(null); }}
-                      placeholder="输入字幕文本，将按分镜拆分并在视频中显示…"
-                      className={styles.textarea} style={{ fontFamily: 'inherit', fontSize: 13, border: '2px solid #000' }} />
-                  </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, marginTop: -4, flexWrap: 'wrap' }}>
                     <select value={voice} onChange={e => setVoice(e.target.value)}
                       style={{ fontSize: 11, padding: '3px 6px', borderRadius: 6, border: '1px solid #111827', background: '#fff', color: '#374151', cursor: 'pointer', width: 110 }}>
