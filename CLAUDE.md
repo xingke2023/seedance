@@ -140,7 +140,7 @@
 
 ### 提示词引擎
 
-- `backend/src/prompt/prompts.js` — 5 个 system prompt，**逐字移植**：`SINGLE_SHOT` / `QCZH`(起承转合) / `STORYBOARD` / `ENHANCE` / `NARRATION`(解说词)。后四个规定了严格 JSON 输出结构，前端与分镜导入依赖，勿随意改写
+- `backend/src/prompt/prompts.js` — 5 个 system prompt，**逐字移植**：`SINGLE_SHOT` / `QCZH`(起承转合) / `STORYBOARD` / `ENHANCE` / `NARRATION`(解说纪录片)。后四个规定了严格 JSON 输出结构，前端与分镜导入依赖，勿随意改写
 - `backend/src/prompt/engine.js` — Anthropic SDK 封装，JSON 用 `jsonrepair` 兜底
 - `backend/src/prompt/guide.js` — 提示词写作指南（结构化数据，非 HTML）
 
@@ -149,12 +149,12 @@
 
 ### 两个正交维度
 
-分镜生成有两个独立开关，和 voiceover-v3 页面的 radio 一致：
+分镜生成有两个独立开关，和 voiceover-v3 页面的 radio 一致（voiceover-v3 上「专业分镜生成」按钮在「视频概念描述」标题行右侧，面板受控渲染在折叠区末尾 —— 按钮在 `<p>` 里，面板的 `<div>` 不能嵌进去）：
 
 | 参数 | 取值 | 说明 |
 |---|---|---|
-| `video_type` | `story`(剧本) / `narration`(解说词) | 解说词优先级最高，走 `NARRATION_SYSTEM`，每镜产出可直接配音的 `narration_script` |
-| `narrative_structure` | `free`(自由) / `qczh`(起承转合) | 仅在剧本下生效；起承转合至少 4 镜 |
+| `video_type` | `story`(叙事短片) / `narration`(解说纪录片) | 解说纪录片优先级最高，走 `NARRATION_SYSTEM`，每镜产出可直接配音的 `narration_script` |
+| `narrative_structure` | `free`(自由) / `qczh`(起承转合) | 仅在叙事短片下生效；起承转合至少 4 镜 |
 
 ### 接口
 

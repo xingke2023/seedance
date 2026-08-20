@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { api } from '@/lib/api';
 import styles from './StoryboardGenerator.module.css';
 
@@ -46,14 +46,14 @@ interface InsuranceCase {
 }
 
 // Two orthogonal axes, matching the backend contract:
-//   video_type          剧本 story | 解说词 narration   — narration wins outright
-//   narrative_structure 自由 free  | 起承转合 qczh       — only meaningful for 剧本
+//   video_type          叙事短片 story | 解说纪录片 narration — narration wins outright
+//   narrative_structure 自由 free    | 起承转合 qczh        — only meaningful for 叙事短片
 export type VideoType = 'story' | 'narration';
 export type Narrative = 'free' | 'qczh';
 
 const VIDEO_TYPES: { value: VideoType; label: string; desc: string }[] = [
-  { value: 'story',     label: '剧本',   desc: '画面叙事，每镜产出英文提示词与首末帧' },
-  { value: 'narration', label: '解说词', desc: '全程旁白配音 + B-roll 画面，每镜产出可直接配音的文案' },
+  { value: 'story',     label: '叙事短片',   desc: '画面叙事，每镜产出英文提示词与首末帧' },
+  { value: 'narration', label: '解说纪录片', desc: '全程旁白配音 + B-roll 画面，每镜产出可直接配音的文案' },
 ];
 
 const NARRATIVES: { value: Narrative; label: string; desc: string }[] = [
@@ -70,7 +70,7 @@ function parseDuration(d: string | undefined, fallback = 5): number {
 
 function toDrafts(sb: Storyboard, videoType: VideoType): ShotDraft[] {
   return (sb.shots || []).map((s, i) => ({
-    // 旁白解说 puts the finished voiceover copy in narration_script; the other
+    // 解说纪录片 puts the finished voiceover copy in narration_script; the other
     // structures have no spoken line, so subtitle stays empty for the user to fill.
     title: s.stage || `分镜 ${s.shot_number ?? i + 1}`,
     description: s.description_zh || '',
@@ -88,16 +88,29 @@ interface Props {
   initialConcept?: string;
   /**
    * Controls 视频类型 from the parent. Pass this when the host page already has
-   * its own 剧本/解说词 selector (voiceover-v3 does) so the two can't disagree —
+   * its own 叙事短片/解说纪录片 selector (voiceover-v3 does) so the two can't disagree —
    * the component then hides its own radio.
    */
   videoType?: VideoType;
+  /**
+   * Controlled open state. Use with `hideTrigger` when the host renders the
+   * button somewhere the panel can't follow — e.g. inside a <p> header row,
+   * where nesting the panel's <div> would be invalid HTML.
+   */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  hideTrigger?: boolean;
   /** Receives the mapped shots; the parent persists them. */
   onGenerated: (shots: ShotDraft[], meta: { title?: string; summary?: string; videoType: VideoType; narrative: Narrative }) => Promise<void> | void;
 }
 
-export default function StoryboardGenerator({ initialConcept = '', videoType: controlledType, onGenerated }: Props) {
-  const [open, setOpen] = useState(false);
+export default function StoryboardGenerator({
+  initialConcept = '', videoType: controlledType,
+  open: controlledOpen, onOpenChange, hideTrigger = false, onGenerated,
+}: Props) {
+  const [ownOpen, setOwnOpen] = useState(false);
+  const open = controlledOpen ?? ownOpen;
+  const setOpen = (v: boolean) => { if (controlledOpen === undefined) setOwnOpen(v); onOpenChange?.(v); };
   const [ownType, setOwnType] = useState<VideoType>('story');
   const [narrative, setNarrative] = useState<Narrative>('free');
 
@@ -149,7 +162,7 @@ export default function StoryboardGenerator({ initialConcept = '', videoType: co
       setConcept(full.description || c.description || c.title);
       if (!keyMessages && full.insurance_needs) setKeyMsg(full.insurance_needs);
       if (!audience && full.tags?.length) setAudience(full.tags.join('、'));
-      setVideoType('narration'); // 案例讲解天然适配解说词
+      setVideoType('narration'); // 案例讲解天然适配解说纪录片
       setCasesOpen(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : '案例读取失败');
@@ -205,17 +218,24 @@ export default function StoryboardGenerator({ initialConcept = '', videoType: co
   // initialConcept is captured at mount, but the panel mounts with the page — the
   // script is usually still empty then. Re-seed on open, without clobbering an
   // edited concept.
-  function togglePanel() {
-    const next = !open;
-    if (next && !concept.trim() && initialConcept.trim()) setConcept(initialConcept);
-    setOpen(next);
-  }
+  function togglePanel() { setOpen(!open); }
+
+  // Re-seed whenever the panel becomes visible, however it was opened.
+  const seededRef = useRef(false);
+  useEffect(() => {
+    if (!open) { seededRef.current = false; return; }
+    if (seededRef.current) return;
+    seededRef.current = true;
+    if (!concept.trim() && initialConcept.trim()) setConcept(initialConcept);
+  }, [open, concept, initialConcept]);
 
   return (
     <div className={styles.wrap}>
-      <button type="button" className={styles.trigger} onClick={togglePanel}>
-        🎬 专业分镜生成
-      </button>
+      {!hideTrigger && (
+        <button type="button" className={styles.trigger} onClick={togglePanel}>
+          🎬 专业分镜生成
+        </button>
+      )}
 
       {open && (
         <div className={styles.panel}>

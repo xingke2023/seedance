@@ -123,8 +123,8 @@ function getVideoInfo(file: File): Promise<{ duration: number; width: number; he
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const SCRIPT_TABS = [
-  { value: 'script'   as const, label: '剧本' },
-  { value: 'subtitle' as const, label: '解说词' },
+  { value: 'script'   as const, label: '叙事短片' },
+  { value: 'subtitle' as const, label: '解说纪录片' },
 ];
 
 const MODELS = [
@@ -1057,6 +1057,7 @@ export default function VoiceoverPage() {
   const [analysisCollapsed, setAnalysisCollapsed] = useState(false);
   const [mediaCollapsed, setMediaCollapsed] = useState(false);
   const [scriptCollapsed, setScriptCollapsed] = useState(false);
+  const [sbOpen, setSbOpen] = useState(false);
   const [dirtyShotIdxs, setDirtyShotIdxs] = useState<Set<number>>(new Set());
   const [videoDirty, setVideoDirty] = useState(false);
   const [savingShots, setSavingShots] = useState(false);
@@ -1962,6 +1963,10 @@ export default function VoiceoverPage() {
                       )}
                     </span>
                   )}
+                  <button type="button" onClick={() => { setSbOpen(v => !v); setScriptCollapsed(false); }}
+                    style={{ fontSize: 11, padding: '2px 8px', border: '1px solid #2563eb', borderRadius: 5, background: sbOpen ? '#eff6ff' : '#fff', cursor: 'pointer', color: '#2563eb', fontWeight: 500, whiteSpace: 'nowrap' }}>
+                    🎬 专业分镜生成
+                  </button>
                   <span style={{ flex: 1 }} />
                 </p>
 
@@ -2021,7 +2026,6 @@ export default function VoiceoverPage() {
                       className={styles.textarea} style={{ fontFamily: 'inherit', fontSize: 13, border: '2px solid #000' }} />
                   </div>
                   </>)}
-
                   {scriptTab === 'subtitle' && (<>
                   <div style={{ position: 'relative', marginBottom: 10 }}>
                     {subtitleInput.trim() && (
@@ -2049,6 +2053,17 @@ export default function VoiceoverPage() {
                     )}
                   </div>
                   </>)}
+
+                  {/* 视频类型由上面的「叙事短片/解说纪录片」radio 驱动，生成器不再自带那一栏。
+                      触发按钮在标题行的 <p> 里，面板不能嵌进去，所以在这里受控渲染。 */}
+                  <StoryboardGenerator
+                    initialConcept={scriptTab === 'subtitle' ? subtitleInput : script}
+                    videoType={scriptTab === 'subtitle' ? 'narration' : 'story'}
+                    open={sbOpen}
+                    onOpenChange={setSbOpen}
+                    hideTrigger
+                    onGenerated={handleImportStoryboard}
+                  />
                   </>)}
 
                   {/* 剧本分析按钮 */}
@@ -2216,13 +2231,6 @@ export default function VoiceoverPage() {
                     ) : anyUploading ? '素材上传中，请等待…' : mediaDescMissing ? '请填写素材说明' : initResult ? '重新生成分镜脚本' : '一键生成分镜'}
                   </button>
                   </div>
-
-                  {/* 视频类型由上面的「剧本/解说词」radio 驱动，生成器不再自带那一栏 */}
-                  <StoryboardGenerator
-                    initialConcept={scriptTab === 'subtitle' ? subtitleInput : script}
-                    videoType={scriptTab === 'subtitle' ? 'narration' : 'story'}
-                    onGenerated={handleImportStoryboard}
-                  />
               </div>
 
               {/* ── Step 2 ── */}
