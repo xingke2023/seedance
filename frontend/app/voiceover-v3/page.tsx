@@ -1065,20 +1065,22 @@ export default function VoiceoverPage() {
   const conceptText = script;
   const setConceptText = (v: string) => {
     setScript(v);
+    // 叙事短片下这份文本只是概念描述，字幕保持为空
     if (videoType === 'narration') { setSubtitleInput(v); setAudioUrl(null); }
     setInitResult(null); setShots([]); setMergedVideoUrl(null);
   };
-  // 只在「切换到解说纪录片」那一刻同步一次。若也跟着 script 变化跑，会把分镜
-  // 导入写进 subtitleInput 的字幕又覆盖回去；日常输入由 setConceptText 负责镜像。
+  // 只在用户切换视频类型那一刻同步一次。若也跟着 script 变化跑，会把分镜导入
+  // 写进 subtitleInput 的字幕又覆盖掉；日常输入由 setConceptText 负责镜像。
+  //   解说纪录片 → 这份文本就是字幕
+  //   叙事短片   → 字幕为空，交给后端按脚本自动生成
+  // 只认用户操作，不在首次挂载时跑，否则会清掉从库里读出来的字幕。
   const prevVideoTypeRef = useRef(videoType);
   useEffect(() => {
     const prev = prevVideoTypeRef.current;
+    if (prev === videoType) return;
     prevVideoTypeRef.current = videoType;
-    if (prev !== 'narration' && videoType === 'narration') {
-      setSubtitleInput(script);
-      setAudioUrl(null);
-    }
-    // 切回叙事短片时不清 subtitleInput —— 那里可能是分镜生成出来的字幕
+    setSubtitleInput(videoType === 'narration' ? script : '');
+    setAudioUrl(null);
   }, [videoType, script]);
 
   const [dirtyShotIdxs, setDirtyShotIdxs] = useState<Set<number>>(new Set());
