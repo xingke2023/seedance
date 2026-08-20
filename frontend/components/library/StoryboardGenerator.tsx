@@ -84,8 +84,16 @@ function toDrafts(sb: Storyboard, videoType: VideoType): ShotDraft[] {
 }
 
 interface Props {
-  /** Seeds 视频概念描述 — usually the video's script. */
+  /** Seeds 视频概念描述 when the host does NOT control it. */
   initialConcept?: string;
+  /**
+   * Controlled 视频概念描述. Pass this when the host page already shows a
+   * 视频概念描述 box (voiceover-v3 does) — the panel then drops its own field and
+   * reads/writes the page's, so the concept is never entered twice.
+   * `onConceptChange` is what 从港险案例库取材 writes back through.
+   */
+  concept?: string;
+  onConceptChange?: (v: string) => void;
   /**
    * Controls 视频类型 from the parent. Pass this when the host page already has
    * its own 叙事短片/解说纪录片 selector (voiceover-v3 does) so the two can't disagree —
@@ -106,6 +114,7 @@ interface Props {
 
 export default function StoryboardGenerator({
   initialConcept = '', videoType: controlledType,
+  concept: controlledConcept, onConceptChange,
   open: controlledOpen, onOpenChange, hideTrigger = false, onGenerated,
 }: Props) {
   const [ownOpen, setOwnOpen] = useState(false);
@@ -118,7 +127,13 @@ export default function StoryboardGenerator({
   const videoType = controlled ? controlledType : ownType;
   const setVideoType = (v: VideoType) => { if (!controlled) setOwnType(v); };
 
-  const [concept, setConcept]       = useState(initialConcept);
+  const [ownConcept, setOwnConcept] = useState(initialConcept);
+  const conceptControlled = controlledConcept !== undefined;
+  const concept = conceptControlled ? controlledConcept : ownConcept;
+  const setConcept = (v: string) => {
+    if (!conceptControlled) setOwnConcept(v);
+    onConceptChange?.(v);
+  };
   const [goal, setGoal]             = useState('');
   const [audience, setAudience]     = useState('');
   const [tone, setTone]             = useState('');
@@ -220,14 +235,16 @@ export default function StoryboardGenerator({
   // edited concept.
   function togglePanel() { setOpen(!open); }
 
-  // Re-seed whenever the panel becomes visible, however it was opened.
+  // Re-seed whenever the panel becomes visible, however it was opened. Only for
+  // the uncontrolled field — a host-controlled concept is already live.
   const seededRef = useRef(false);
   useEffect(() => {
+    if (conceptControlled) return;
     if (!open) { seededRef.current = false; return; }
     if (seededRef.current) return;
     seededRef.current = true;
-    if (!concept.trim() && initialConcept.trim()) setConcept(initialConcept);
-  }, [open, concept, initialConcept]);
+    if (!ownConcept.trim() && initialConcept.trim()) setOwnConcept(initialConcept);
+  }, [open, conceptControlled, ownConcept, initialConcept]);
 
   return (
     <div className={styles.wrap}>
@@ -273,16 +290,29 @@ export default function StoryboardGenerator({
             </div>
           )}
 
-          <div className={styles.field}>
-            <div className={styles.fieldHead}>
-              <label>视频概念描述 <span className={styles.req}>*</span></label>
+          {conceptControlled ? (
+            // The page's own 视频概念描述 box is the single source — don't ask twice.
+            <div className={styles.conceptRef}>
+              <span className={styles.conceptRefLabel}>
+                概念取自上方「视频概念描述」
+                {!concept.trim() && <span className={styles.conceptRefWarn}>（尚未填写）</span>}
+              </span>
               <button type="button" className={styles.linkBtn} onClick={openCases}>
                 {casesOpen ? '收起案例库' : '从港险案例库取材'}
               </button>
             </div>
-            <textarea rows={3} value={concept} onChange={e => setConcept(e.target.value)}
-              placeholder="这条视频要讲什么？例如：一位年轻插画师在雨天的咖啡馆里完成一幅画" />
-          </div>
+          ) : (
+            <div className={styles.field}>
+              <div className={styles.fieldHead}>
+                <label>视频概念描述 <span className={styles.req}>*</span></label>
+                <button type="button" className={styles.linkBtn} onClick={openCases}>
+                  {casesOpen ? '收起案例库' : '从港险案例库取材'}
+                </button>
+              </div>
+              <textarea rows={3} value={concept} onChange={e => setConcept(e.target.value)}
+                placeholder="这条视频要讲什么？例如：一位年轻插画师在雨天的咖啡馆里完成一幅画" />
+            </div>
+          )}
 
           {casesOpen && (
             <div className={styles.cases}>

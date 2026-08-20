@@ -113,3 +113,12 @@
   .grid2 { grid-template-columns: 1fr; }
   .struct { min-width: 100%; }
 }
+
+/* Shown instead of the concept textarea when the host page owns that field. */
+.conceptRef {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 7px 10px; margin-bottom: 10px;
+  border: 1px dashed #d1d5db; border-radius: 8px; background: #fff;
+}
+.conceptRefLabel { font-size: 12px; color: #6b7280; }
+.conceptRefWarn { color: #b45309; }

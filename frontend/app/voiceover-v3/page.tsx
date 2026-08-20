@@ -2057,7 +2057,13 @@ export default function VoiceoverPage() {
                   {/* 视频类型由上面的「叙事短片/解说纪录片」radio 驱动，生成器不再自带那一栏。
                       触发按钮在标题行的 <p> 里，面板不能嵌进去，所以在这里受控渲染。 */}
                   <StoryboardGenerator
-                    initialConcept={scriptTab === 'subtitle' ? subtitleInput : script}
+                    concept={scriptTab === 'subtitle' ? subtitleInput : script}
+                    onConceptChange={v => {
+                      // 从案例库取材时回写到页面上那个框；和手改概念一样，作废已生成的分镜
+                      if (scriptTab === 'subtitle') { setSubtitleInput(v); setAudioUrl(null); }
+                      else setScript(v);
+                      setInitResult(null); setShots([]); setMergedVideoUrl(null);
+                    }}
                     videoType={scriptTab === 'subtitle' ? 'narration' : 'story'}
                     open={sbOpen}
                     onOpenChange={setSbOpen}
