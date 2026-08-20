@@ -141,7 +141,9 @@
 
 ### 提示词引擎
 
-- `backend/src/prompt/prompts.js` — 5 个 system prompt，**逐字移植**：`SINGLE_SHOT` / `QCZH`(起承转合) / `STORYBOARD` / `ENHANCE` / `NARRATION`(解说纪录片)。后四个规定了严格 JSON 输出结构，前端与分镜导入依赖，勿随意改写
+- `backend/src/prompt/prompts.js` — 6 个 system prompt。前 5 个**逐字移植**：`SINGLE_SHOT` / `QCZH`(起承转合) / `STORYBOARD` / `ENHANCE` / `NARRATION`(解说纪录片)。后四个规定了严格 JSON 输出结构，前端与分镜导入依赖，勿随意改写。
+  第 6 个 `DIALOGUE` **是新写的，不是移植**：`STORYBOARD`/`QCZH` 只产画面、没有台词字段，
+  而换引擎前 `/voiceover/init` 会逐镜生成字幕 —— 所以叙事短片走**两步生成**，第二步补台词。
 - `backend/src/prompt/engine.js` — Anthropic SDK 封装，JSON 用 `jsonrepair` 兜底
 - `backend/src/prompt/guide.js` — 提示词写作指南（结构化数据，非 HTML）
 
@@ -167,6 +169,16 @@ voiceover-v3 上「叙事短片 / 解说纪录片」是被提到页面层的生�
 |---|---|---|
 | `video_type` | `story`(叙事短片) / `narration`(解说纪录片) | 解说纪录片优先级最高，走 `NARRATION_SYSTEM`，每镜产出可直接配音的 `narration_script` |
 | `narrative_structure` | `free`(自由) / `qczh`(起承转合) | 仅在叙事短片下生效；起承转合至少 4 镜 |
+
+### 叙事短片的两步生成
+
+`video_type=story` 时 `/prompt/storyboard` 会连发两次模型调用：
+
+1. `STORYBOARD` / `QCZH` 出画面（`prompt_en`、首末帧、构图色调…）
+2. `DIALOGUE` 按第一步的镜头编号+时长+画面说明**逐镜写台词**，合并进每个 shot 的 `subtitle`
+
+第二步用 `effort: 'low'`，实测约 5s。**失败不阻断** —— 宁可交付没台词的分镜，也不要整个请求失败。
+解说纪录片自带 `narration_script`，跳过第二步。
 
 ### 角色锚定
 

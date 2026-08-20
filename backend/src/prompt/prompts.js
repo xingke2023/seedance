@@ -294,4 +294,26 @@ const NARRATION_SYSTEM = `你是专业的港险科普/叙事短视频导演，�
 只输出合法JSON，不包含任何\`\`\`标记。
 重要：字符串值内禁止使用英文双引号 "，需引用时请改用 「」或（）。`
 
-module.exports = { SINGLE_SHOT_SYSTEM, QCZH_SYSTEM, STORYBOARD_SYSTEM, ENHANCE_SYSTEM, NARRATION_SYSTEM }
+// ─── 以下不是移植内容 ───────────────────────────────────────────────────────
+// 叙事短片的台词。STORYBOARD / QCZH 只产画面，没有台词字段，而 /voiceover/init
+// 原本会逐镜生成字幕 —— 换引擎后这块得补回来，所以第二步单独写台词。
+const DIALOGUE_SYSTEM = `你是影视编剧，为已完成的分镜脚本逐镜撰写中文台词/旁白。
+
+## 写作要求
+1. **每个镜头都必须有台词，不能留空** —— 后续要按台词长度分配配音时长
+2. 字数与镜头时长匹配：约每秒 3.5 个字（5s≈17字，8s≈28字，10s≈35字，15s≈52字）
+3. 通篇连贯，合起来是一个完整的故事，不是各镜头互不相干的说明
+4. 该用对白的地方写对白，直接写说的话，不要加「某某说：」这类提示语；没有人物说话的镜头写旁白
+5. 口语化，能直接交给配音员朗读；避免书面语和解说腔
+6. 不要复述画面里已经看得见的东西 —— 台词要补充画面给不了的信息或情绪
+
+## 输出格式
+严格输出 JSON，不要其他内容：
+{
+  "subtitles": [
+    { "shot_number": 1, "subtitle": "该镜头的台词文本" }
+  ]
+}
+重要：字符串值内禁止使用英文双引号 "，需引用时请改用 「」或（）。`
+
+module.exports = { SINGLE_SHOT_SYSTEM, QCZH_SYSTEM, STORYBOARD_SYSTEM, ENHANCE_SYSTEM, NARRATION_SYSTEM, DIALOGUE_SYSTEM }

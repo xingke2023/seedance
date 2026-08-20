@@ -19,6 +19,7 @@ export interface GeneratedShot {
   first_frame?: string;
   last_frame?: string;
   narration_script?: string; // 解说纪录片专有
+  subtitle?: string;         // 叙事短片的台词，后端第二步补上
   stage?: string;            // 起承转合专有
   image_refs?: number[];     // 后端从 prompt_en 的 <图片N> 解析出来
 }
@@ -119,12 +120,12 @@ export function parseDuration(d: string | undefined, fallback = 5): number {
 /** Map a /prompt/storyboard result onto shot fields. */
 export function toShotDrafts(sb: Storyboard, videoType: VideoType): ShotDraft[] {
   return (sb.shots || []).map((s, i) => ({
-    // 解说纪录片 puts the finished voiceover copy in narration_script; 叙事短片 has
-    // no spoken line, so the subtitle stays empty.
+    // 解说纪录片 的成品旁白在 narration_script；叙事短片的台词由后端第二步写进
+    // subtitle（STORYBOARD / QCZH 本身不产台词字段）。
     title: s.stage || `分镜 ${s.shot_number ?? i + 1}`,
     description: s.description_zh || '',
     prompt: s.prompt_en || '',
-    subtitle: videoType === 'narration' ? (s.narration_script || '') : '',
+    subtitle: videoType === 'narration' ? (s.narration_script || '') : (s.subtitle || ''),
     duration: parseDuration(s.duration),
     shot_type: s.shot_type || '',
     lighting: s.lighting || '',

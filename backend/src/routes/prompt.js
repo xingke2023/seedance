@@ -7,6 +7,7 @@ const {
   STORYBOARD_SYSTEM,
   ENHANCE_SYSTEM,
   NARRATION_SYSTEM,
+  DIALOGUE_SYSTEM,
 } = require('../prompt/prompts')
 
 const str = v => String(v ?? '').trim()
@@ -151,6 +152,33 @@ async function promptRoutes(fastify) {
           error: truncated ? '分镜结果被截断，请减少镜头数量后重试' : `解析分镜结果失败：${e.message}`,
           raw: text,
         })
+      }
+
+      // 叙事短片第二步：补台词。STORYBOARD / QCZH 只产画面，没有台词字段，
+      // 而换引擎前 /voiceover/init 是会逐镜生成字幕的 —— 不补这一步，叙事短片
+      // 就没有字幕也没法配音。解说纪录片自带 narration_script，跳过。
+      // 失败不阻断：宁可交付没台词的分镜，也不要整个请求失败。
+      if (videoType !== 'narration' && Array.isArray(storyboard.shots) && storyboard.shots.length > 0) {
+        try {
+          const outline = storyboard.shots
+            .map(sh => `${sh.shot_number}. [${sh.duration}] ${sh.description_zh || ''}`)
+            .join('\n')
+          const { text: dText } = await callClaude({
+            system: DIALOGUE_SYSTEM,
+            user: `视频概念：${concept}\n\n分镜画面：\n${outline}`,
+            maxTokens: 8000,
+            effort: 'low',
+            apiKey: str(b.api_key) || undefined,
+          })
+          const byNumber = new Map(
+            (parseJson(dText).subtitles || []).map(x => [Number(x.shot_number), str(x.subtitle)])
+          )
+          storyboard.shots.forEach((sh, i) => {
+            sh.subtitle = byNumber.get(Number(sh.shot_number)) || byNumber.get(i + 1) || ''
+          })
+        } catch (e) {
+          request.log.warn({ err: e }, 'dialogue pass failed; shots keep empty subtitles')
+        }
       }
 
       // 把 prompt_en 里的 <图片N> 提成结构化的 image_refs，导入分镜时才能把真实
