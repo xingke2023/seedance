@@ -25,6 +25,7 @@
 - `/billing` — Billing overview, compact one-line layout
 - `/assets/real` — 真人资源 (LivenessFace assets)
 - `/assets/virtual` — 虚拟人像 (AIGC assets)
+- `/insurance` — 港险资料（案例 956 / 问答 1418，搜索 + 标签筛选 + 详情浮窗），入口在 TopNav
 - `/tokens` — Token管理 (hidden from nav)
 - `/keys` — 资源密钥 (hidden from nav)
 
@@ -41,7 +42,7 @@
 
 ### Components
 
-- `TopNav` — Navigation bar (首页, 项目, 真人资源, 虚拟人像, dropdown: 任务列表, 账单)
+- `TopNav` — Navigation bar (首页, 港险资料, 真人头像, 虚拟头像, dropdown: 任务列表, 账单)
 - `components/video-editor/CameraEditor` — Three.js 3D camera position editor
 - `components/video-editor/types.ts` — Shared TypeScript interfaces (Shot, Video, CameraState, etc.)
 - `AssetsPanel` — Shared assets panel component (exported from `app/assets/AssetsPanel.tsx`)

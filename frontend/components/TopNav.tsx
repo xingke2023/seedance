@@ -6,7 +6,8 @@ import { useEffect, useState, useRef } from 'react';
 import { getUserFromToken, clearTokens, getAccessToken } from '@/lib/auth';
 
 const NAV_ITEMS = [
-  { href: '/projects', label: '首页' },
+  { href: '/projects',  label: '首页' },
+  { href: '/insurance', label: '港险资料' },
 ];
 
 const ASSET_ITEMS = [
