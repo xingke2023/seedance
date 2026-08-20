@@ -101,6 +101,23 @@ async function promptRoutes(fastify) {
     opt('核心信息', str(b.key_messages))
     opt('总时长',   str(b.duration_total))
 
+    // 角色/素材锚定。系统提示词是逐字移植的，不动它 —— 这些和创作目标一样
+    // 走 user message。没有这段，产出的 prompt_en 不会引用已上传的人像，
+    // Seedance 也就锁不住角色形象。
+    const subjectDefs = str(b.subject_definitions)
+    const imageDescs  = str(b.image_descriptions)
+    if (subjectDefs || imageDescs) {
+      parts.push('')
+      parts.push('本视频已绑定以下角色/参考素材：')
+      if (subjectDefs) parts.push(subjectDefs)
+      if (imageDescs)  parts.push(imageDescs)
+      parts.push(
+        '要求：凡是画面中出现上述角色的镜头，prompt_en 必须以 <图片N> 的形式引用对应素材编号' +
+        '（例如 The woman in <图片 1> walks through …），保证多个镜头之间人物形象一致；' +
+        '未出现角色的空镜不必引用。'
+      )
+    }
+
     let system, user
     if (videoType === 'narration') {
       parts.push(`镜头数量：${shotCount}个镜头`)
@@ -134,6 +151,18 @@ async function promptRoutes(fastify) {
           error: truncated ? '分镜结果被截断，请减少镜头数量后重试' : `解析分镜结果失败：${e.message}`,
           raw: text,
         })
+      }
+
+      // 把 prompt_en 里的 <图片N> 提成结构化的 image_refs，导入分镜时才能把真实
+      // 素材挂上去。从文本解析而不是让模型多输出一个字段：系统提示词规定了严格的
+      // JSON 结构，模型漏写一个新字段的概率，远高于漏写它刚写进 prompt 的引用。
+      const IMG_REF = /<图片\s*(\d+)\s*>/g
+      for (const shot of storyboard.shots || []) {
+        const refs = new Set()
+        for (const m of String(shot.prompt_en || '').matchAll(IMG_REF)) {
+          refs.add(parseInt(m[1], 10))
+        }
+        shot.image_refs = [...refs].sort((a, b) => a - b)
       }
 
       storyboard.narrative_structure = narrativeStructure

@@ -21,6 +21,7 @@ interface GeneratedShot {
   last_frame?: string;
   narration_script?: string; // 旁白解说模式专有
   stage?: string;            // 起承转合模式专有
+  image_refs?: number[];     // 后端从 prompt_en 的 <图片N> 解析出来
 }
 interface Storyboard {
   title?: string;
@@ -39,6 +40,8 @@ export interface ShotDraft {
   shot_type: string;
   lighting: string;
   camera_movement: string;
+  /** 1-based 素材编号，对应 prompt 里的 <图片N>；宿主据此把角色挂到分镜上。 */
+  imageRefs: number[];
 }
 
 // Two orthogonal axes, matching the backend contract:
@@ -114,12 +117,19 @@ function toDrafts(sb: Storyboard, videoType: VideoType): ShotDraft[] {
     shot_type: s.shot_type || '',
     lighting: s.lighting || '',
     camera_movement: s.camera_move || '',
+    imageRefs: Array.isArray(s.image_refs) ? s.image_refs : [],
   }));
 }
 
 interface Props {
   /** Seeds 视频概念描述 when the host does NOT control it. */
   initialConcept?: string;
+  /**
+   * 已绑定的角色与参考素材，两段文本原样喂给模型，让它在 prompt_en 里用
+   * <图片N> 锚定角色 —— 没有这个，生成的提示词认不出已上传的人像。
+   */
+  subjectDefinitions?: string;
+  imageDescriptions?: string;
   /**
    * Controlled 视频概念描述, read-only. Pass this when the host page already
    * shows a 视频概念描述 box (voiceover-v3 does) — the panel then drops its own
@@ -146,7 +156,7 @@ interface Props {
 
 export default function StoryboardGenerator({
   initialConcept = '', videoType: controlledType,
-  concept: controlledConcept,
+  concept: controlledConcept, subjectDefinitions, imageDescriptions,
   open: controlledOpen, onOpenChange, hideTrigger = false, onGenerated,
 }: Props) {
   const [mounted, setMounted] = useState(false);
@@ -193,6 +203,8 @@ export default function StoryboardGenerator({
           duration_total: durationTotal.trim(),
           narrative_structure: narrative,
           video_type: videoType,
+          subject_definitions: subjectDefinitions || '',
+          image_descriptions: imageDescriptions || '',
         }
       );
       const sb = res.result;

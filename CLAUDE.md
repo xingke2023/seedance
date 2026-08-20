@@ -168,11 +168,17 @@ voiceover-v3 上「叙事短片 / 解说纪录片」是被提到页面层的生�
 | `video_type` | `story`(叙事短片) / `narration`(解说纪录片) | 解说纪录片优先级最高，走 `NARRATION_SYSTEM`，每镜产出可直接配音的 `narration_script` |
 | `narrative_structure` | `free`(自由) / `qczh`(起承转合) | 仅在叙事短片下生效；起承转合至少 4 镜 |
 
+### 角色锚定
+
+`/prompt/storyboard` 接受 `subject_definitions` 和 `image_descriptions`（与 `/voiceover/init` 同格式），拼进 **user message**（系统提示词逐字移植，不动），要求模型在 `prompt_en` 里用 `<图片N>` 引用角色。返回前后端从 `prompt_en` 正则提取出 **`image_refs: number[]`** 挂到每个 shot 上 —— 从文本反解而不是让模型多输出一个字段，因为系统提示词规定了严格 JSON 结构，模型漏写新字段的概率远高于漏写它刚写进 prompt 的引用。
+
+**`<图片N>` 的编号必须两条链路一致**：voiceover-v3 的 `subjectContext`（带图主体在前、参考素材在后）同时供「一键生成分镜」和「专业分镜生成」使用，各算各的一旦漂移，角色就会锚到别的图上。导入时按 `image_refs` 反查回主体，填进分镜的 `subjects`。
+
 ### 接口
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/prompt/storyboard` | 多镜头分镜脚本（三种组合），返回严格 JSON |
+| POST | `/prompt/storyboard` | 多镜头分镜脚本（三种组合），返回严格 JSON。可传 `subject_definitions` / `image_descriptions` 做角色锚定 |
 | POST | `/prompt/generate` | 单镜头提示词（Markdown 输出） |
 | POST | `/prompt/enhance` | 提示词优化（JSON 输出） |
 | GET | `/prompt/model` | 当前使用的模型名 |

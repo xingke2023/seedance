@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, useRef, useState, useEffect, useCallback } from 'react';
+import { Fragment, useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import dynamic from 'next/dynamic';
@@ -1083,6 +1083,33 @@ export default function VoiceoverPage() {
     setAudioUrl(null);
   }, [videoType, script]);
 
+  // 角色/素材上下文。两条分镜链路共用同一份 <图片N> 编号 —— 各算各的迟早漂移，
+  // 编号一错，提示词里的角色锚定就指到别的图上去了。
+  const subjectContext = useMemo(() => {
+    const readyImages = mediaItems.filter(m => m.url && !m.uploading && m.mediaType === 'image');
+    const withImage    = videoSubjects.filter(s => s.image_url);
+    const withoutImage = videoSubjects.filter(s => !s.image_url);
+    const nameOf = (s: ProjectSubject) =>
+      scriptAnalysis.find(a => a.linkedSubjectId === s.id)?.label || s.label;
+    const descOf = (s: ProjectSubject) => {
+      const a = scriptAnalysis.find(x => x.linkedSubjectId === s.id);
+      return a ? `${a.appearance}；${a.personality}` : (s.description || '');
+    };
+    const characterLines = [
+      ...withImage.map((s, i) => `角色「${nameOf(s)}」绑定<图片${i + 1}>，外貌描述：${s.description || '见图片'}`),
+      ...withoutImage.map(s => `角色「${nameOf(s)}」，外貌描述：${s.description || '未提供'}`),
+    ];
+    const descLines = [
+      ...withImage.map((s, i) => `图片${i + 1}：角色「${nameOf(s)}」— ${descOf(s) || '见图片'}`),
+      ...readyImages.map((m, i) => `图片${withImage.length + i + 1}：参考素材「${m.name || '素材'}」— ${m.description || ''}`),
+    ];
+    return {
+      characterDefs:     characterLines.join('\n'),
+      imageDescriptions: descLines.join('\n'),
+      subjectsWithImage: withImage,   // 1-based 编号 → 角色，供 image_refs 反查
+    };
+  }, [videoSubjects, mediaItems, scriptAnalysis]);
+
   const [dirtyShotIdxs, setDirtyShotIdxs] = useState<Set<number>>(new Set());
   const [videoDirty, setVideoDirty] = useState(false);
   const [savingShots, setSavingShots] = useState(false);
@@ -1558,18 +1585,28 @@ export default function VoiceoverPage() {
     Object.values(pollRefs.current).forEach(clearInterval);
     pollRefs.current = {};
 
-    const imported: VoiceoverShot[] = drafts.map((d, i) => ({
-      shot_number:     i + 1,
-      title:           d.title || `分镜 ${i + 1}`,
-      subtitle:        d.subtitle,
-      description:     d.description,
-      prompt:          d.prompt,
-      duration:        d.duration,
-      ratio,
-      shot_size:       d.shot_type,
-      camera_movement: d.camera_movement,
-      mood:            d.lighting,
-    }));
+    const imported: VoiceoverShot[] = drafts.map((d, i) => {
+      // <图片N> 是 1-based，对应 subjectContext 里带图角色的顺序；
+      // 超出角色数量的编号指向参考素材，不是角色，跳过。
+      const labels = d.imageRefs
+        .map(n => subjectContext.subjectsWithImage[n - 1])
+        .filter(Boolean)
+        .map(sub => scriptAnalysis.find(a => a.linkedSubjectId === sub.id)?.label || sub.label);
+      return {
+        shot_number:     i + 1,
+        title:           d.title || `分镜 ${i + 1}`,
+        subtitle:        d.subtitle,
+        description:     d.description,
+        prompt:          d.prompt,
+        duration:        d.duration,
+        ratio,
+        shot_size:       d.shot_type,
+        camera_movement: d.camera_movement,
+        mood:            d.lighting,
+        subjects:        labels,
+        shot_subjects:   labels.map((label, k) => ({ label, color: ['#3b82f6','#ef4444','#10b981','#f59e0b'][k % 4] })),
+      };
+    });
 
     setShots(imported);
     setInitResult({
@@ -1600,36 +1637,9 @@ export default function VoiceoverPage() {
       const imageCount = readyMedia.filter(m => m.mediaType === 'image').length + subjectImagesCount;
       const videoCount = readyMedia.filter(m => m.mediaType === 'video').length;
       const audioCount = readyMedia.filter(m => m.mediaType === 'audio').length;
-      // Build character definitions from ALL videoSubjects for storyboard generation
-      const withImage = videoSubjects.filter(s => s.image_url);
-      const withoutImage = videoSubjects.filter(s => !s.image_url);
-      const characterLines: string[] = [];
-      withImage.forEach((s, i) => {
-        const analysis = scriptAnalysis.find(a => a.linkedSubjectId === s.id);
-        const name = analysis?.label || s.label;
-        characterLines.push(`角色「${name}」绑定<图片${i + 1}>，外貌描述：${s.description || '见图片'}`);
-      });
-      withoutImage.forEach(s => {
-        const analysis = scriptAnalysis.find(a => a.linkedSubjectId === s.id);
-        const name = analysis?.label || s.label;
-        characterLines.push(`角色「${name}」，外貌描述：${s.description || '未提供'}`);
-      });
-      const characterDefs = characterLines.length > 0 ? characterLines.join('\n') : '';
-      const finalSubjectDefs = characterDefs || '';
-
-      // Build imageDescriptions: 角色图片描述 + 参考素材图片描述
-      const descLines: string[] = [];
-      withImage.forEach((s, i) => {
-        const analysis = scriptAnalysis.find(a => a.linkedSubjectId === s.id);
-        const desc = analysis ? `${analysis.appearance}；${analysis.personality}` : (s.description || '');
-        const name = analysis?.label || s.label;
-        descLines.push(`图片${i + 1}：角色「${name}」— ${desc || '见图片'}`);
-      });
-      const mediaImages = readyMedia.filter(m => m.mediaType === 'image');
-      mediaImages.forEach((m, i) => {
-        descLines.push(`图片${subjectImagesCount + i + 1}：参考素材「${m.name || '素材'}」— ${m.description || ''}`);
-      });
-      const imageDescriptions = descLines.length > 0 ? descLines.join('\n') : undefined;
+      // 与「专业分镜生成」共用同一份角色/素材编号（见 subjectContext）
+      const finalSubjectDefs = subjectContext.characterDefs;
+      const imageDescriptions = subjectContext.imageDescriptions || undefined;
 
       const result = await api.post<InitResult>('/voiceover/init', { script: script.trim(), style, ratio, imageCount, subjectImageCount: subjectImagesCount, videoCount, audioCount, subjectDefinitions: finalSubjectDefs || undefined, imageDescriptions, subtitleMode, subtitleInput: subtitleInput.trim() || undefined });
       setInitResult(result);
@@ -2042,6 +2052,8 @@ export default function VoiceoverPage() {
                       视频类型由上面的 radio 驱动，概念取自唯一那个 textarea。 */}
                   <StoryboardGenerator
                     concept={conceptText}
+                    subjectDefinitions={subjectContext.characterDefs}
+                    imageDescriptions={subjectContext.imageDescriptions}
                     videoType={videoType}
                     open={sbOpen}
                     onOpenChange={setSbOpen}

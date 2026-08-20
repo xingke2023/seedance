@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { api } from '@/lib/api';
@@ -115,8 +115,30 @@ export default function VideoEditorPage() {
     setIniting(false);
   }
 
+  // 与 voiceover-v3 同一套 <图片N> 编号规则：带图主体按顺序 1..N
+  const subjectContext = useMemo(() => {
+    const withImage = videoSubjects.filter(sub => sub.image_url);
+    return {
+      characterDefs: withImage
+        .map((sub, i) => `角色「${sub.label}」绑定<图片${i + 1}>，外貌描述：${sub.description || '见图片'}`)
+        .join('\n'),
+      imageDescriptions: withImage
+        .map((sub, i) => `图片${i + 1}：角色「${sub.label}」— ${sub.description || '见图片'}`)
+        .join('\n'),
+      subjectsWithImage: withImage,
+    };
+  }, [videoSubjects]);
+
   async function handleImportStoryboard(drafts: ShotDraft[]) {
-    const created = await api.post<Shot[]>(`/videos/${videoId}/shots`, { shots: drafts });
+    const withSubjects = drafts.map(d => ({
+      ...d,
+      // <图片N> 反查回主体，超出主体数量的编号指向参考素材，跳过
+      subjects: d.imageRefs
+        .map(n => subjectContext.subjectsWithImage[n - 1])
+        .filter(Boolean)
+        .map(sub => ({ label: sub.label, imageUrl: sub.image_url || undefined })),
+    }));
+    const created = await api.post<Shot[]>(`/videos/${videoId}/shots`, { shots: withSubjects });
     if (created) setShots(prev => [...prev, ...created]);
   }
 
@@ -323,7 +345,10 @@ export default function VideoEditorPage() {
           </button>
         </div>
 
-        <StoryboardGenerator initialConcept={script} onGenerated={handleImportStoryboard} />
+        <StoryboardGenerator initialConcept={script}
+          subjectDefinitions={subjectContext.characterDefs}
+          imageDescriptions={subjectContext.imageDescriptions}
+          onGenerated={handleImportStoryboard} />
 
         {shots.length === 0 ? (
           <div className={styles.emptyShots}>输入脚本后，点击「一键生成分镜」自动规划</div>
