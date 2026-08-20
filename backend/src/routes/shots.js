@@ -26,9 +26,9 @@ async function shotRoutes(fastify) {
       for (const shot of shots) {
         num++
         const r = await query(
-          `INSERT INTO shots (video_id, shot_number, title, description, prompt, subtitle, duration, ratio, mood, camera_movement, shot_type, lighting, reference_images, subjects)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
-          [videoId, num, shot.title || null, shot.description || null, shot.prompt || null, shot.subtitle || null, shot.duration || 8, shot.ratio || null, shot.mood || null, shot.camera_movement || null, shot.shot_type || null, shot.lighting || null, JSON.stringify(shot.reference_images || []), JSON.stringify(shot.subjects || [])]
+          `INSERT INTO shots (video_id, shot_number, title, description, prompt, subtitle, duration, ratio, mood, camera_movement, shot_type, lighting, roll_type, reference_images, subjects)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+          [videoId, num, shot.title || null, shot.description || null, shot.prompt || null, shot.subtitle || null, shot.duration || 8, shot.ratio || null, shot.mood || null, shot.camera_movement || null, shot.shot_type || null, shot.lighting || null, shot.roll_type || null, JSON.stringify(shot.reference_images || []), JSON.stringify(shot.subjects || [])]
         )
         inserted.push(r.rows[0])
       }
@@ -75,6 +75,7 @@ async function shotRoutes(fastify) {
       addField('mood', body.mood)
       addField('shot_type', body.shot_type)
       addField('lighting', body.lighting)
+      addField('roll_type', body.roll_type)
       addField('camera_movement', body.camera_movement)
       addField('camera_position_x', body.camera_position_x)
       addField('camera_position_y', body.camera_position_y)

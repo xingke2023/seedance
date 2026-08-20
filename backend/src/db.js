@@ -99,6 +99,7 @@ async function initDB() {
   await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_shots_video_order ON shots(video_id, shot_number)`).catch(() => {})
   await query(`ALTER TABLE shots ADD COLUMN IF NOT EXISTS shot_type VARCHAR(30)`).catch(() => {})
   await query(`ALTER TABLE shots ADD COLUMN IF NOT EXISTS lighting VARCHAR(30)`).catch(() => {})
+  await query(`ALTER TABLE shots ADD COLUMN IF NOT EXISTS roll_type VARCHAR(10)`).catch(() => {})
 
   await query(`
     CREATE TABLE IF NOT EXISTS video_media (

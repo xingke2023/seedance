@@ -141,7 +141,7 @@
 
 ### 提示词引擎
 
-- `backend/src/prompt/prompts.js` — 6 个 system prompt。前 5 个**逐字移植**：`SINGLE_SHOT` / `QCZH`(起承转合) / `STORYBOARD` / `ENHANCE` / `NARRATION`(解说纪录片)。后四个规定了严格 JSON 输出结构，前端与分镜导入依赖，勿随意改写。
+- `backend/src/prompt/prompts.js` — 6 个 system prompt + 2 段追加规则。前 5 个**逐字移植**：`SINGLE_SHOT` / `QCZH`(起承转合) / `STORYBOARD` / `ENHANCE` / `NARRATION`(解说纪录片)。后四个规定了严格 JSON 输出结构，前端与分镜导入依赖，勿随意改写。
   第 6 个 `DIALOGUE` **是新写的，不是移植**：`STORYBOARD`/`QCZH` 只产画面、没有台词字段，
   而换引擎前 `/voiceover/init` 会逐镜生成字幕 —— 所以叙事短片走**两步生成**，第二步补台词。
 - `backend/src/prompt/engine.js` — Anthropic SDK 封装，JSON 用 `jsonrepair` 兜底
@@ -179,6 +179,12 @@ voiceover-v3 上「叙事短片 / 解说纪录片」是被提到页面层的生�
 
 第二步用 `effort: 'low'`，实测约 5s。**失败不阻断** —— 宁可交付没台词的分镜，也不要整个请求失败。
 解说纪录片自带 `narration_script`，跳过第二步。
+
+### B-roll 手法
+
+`NARRATION_SYSTEM` 里本来就有这套（情绪对应、下三分之一留白），抽成 `BROLL_CRAFT` 后**叙事短片也用**（解说纪录片跳过，避免和它自带的重复）。三条规则：情绪优先于字面（讲「保费两万」给母亲深夜算账的侧脸，不打数字）、抽象概念落到可拍摄的实物、**下三分之一保持干净给字幕腾位**。
+
+`ROLL_TYPE_FIELD` 额外要求每镜输出 `roll_type`（`a_roll` = 画面里有人正对镜头说话，其余 `b_roll`）—— 系统提示词的 JSON 结构里没这个字段，所以必须显式要；后端兜底填 `b_roll`。落库到 `shots.roll_type`，voiceover-v3 的分镜行上显示彩色标签。
 
 ### 角色锚定
 

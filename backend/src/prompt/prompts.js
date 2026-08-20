@@ -316,4 +316,25 @@ const DIALOGUE_SYSTEM = `你是影视编剧，为已完成的分镜脚本逐镜�
 }
 重要：字符串值内禁止使用英文双引号 "，需引用时请改用 「」或（）。`
 
-module.exports = { SINGLE_SHOT_SYSTEM, QCZH_SYSTEM, STORYBOARD_SYSTEM, ENHANCE_SYSTEM, NARRATION_SYSTEM, DIALOGUE_SYSTEM }
+// B-roll 手法。NARRATION_SYSTEM 里本来就有这套（情绪对应、下三分之一留白），
+// 这里把它抽出来给叙事短片也用 —— 同样是新写的，不是移植内容。
+const BROLL_CRAFT = `
+## 画面手法（B-roll 原则）
+1. **情绪优先于字面**：画面不是台词的字面配图，而是那句话情绪的视觉放大。
+   讲「保费一年两万」不要打字幕写数字，给母亲深夜算账的侧脸；
+   讲「等了十年」不要拍日历，给窗台上换了三轮的植物。
+2. **抽象概念要落到具体画面**：时间、责任、风险、承诺这类词，都必须找到可拍摄的实物或动作来承载。
+3. **给字幕留位**：每镜的下三分之一保持干净，重要视觉元素（人脸、主体动作、关键道具）
+   不要压在画面底部 —— 那里要烧字幕。prompt_en 里用构图词明确这一点。
+4. **镜头类型标注**：为每个镜头判断它是 A-roll 还是 B-roll —— 画面里有人物正对镜头说话
+   （口播、访谈、对白正面镜头）的是 a_roll，其余一律 b_roll。`
+
+// 追加一个输出字段。系统提示词规定的 JSON 结构里没有它，所以要显式要求；
+// 模型漏写时后端会兜底填 b_roll。
+const ROLL_TYPE_FIELD = `
+## 额外输出字段
+在每个镜头对象里额外增加一个字段：
+  "roll_type": "a_roll" 或 "b_roll"
+判定标准见上：画面中有人物正对镜头说话的是 a_roll，其余是 b_roll。`
+
+module.exports = { SINGLE_SHOT_SYSTEM, QCZH_SYSTEM, STORYBOARD_SYSTEM, ENHANCE_SYSTEM, NARRATION_SYSTEM, DIALOGUE_SYSTEM, BROLL_CRAFT, ROLL_TYPE_FIELD }

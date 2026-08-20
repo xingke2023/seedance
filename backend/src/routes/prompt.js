@@ -8,6 +8,8 @@ const {
   ENHANCE_SYSTEM,
   NARRATION_SYSTEM,
   DIALOGUE_SYSTEM,
+  BROLL_CRAFT,
+  ROLL_TYPE_FIELD,
 } = require('../prompt/prompts')
 
 const str = v => String(v ?? '').trim()
@@ -119,20 +121,24 @@ async function promptRoutes(fastify) {
       )
     }
 
+    // B-roll 手法：解说纪录片的系统提示词里本来就有，叙事短片要显式补上。
+    // roll_type 是系统提示词 JSON 结构里没有的字段，两种类型都得显式要求。
+    const craft = (videoType === 'narration' ? '' : BROLL_CRAFT) + ROLL_TYPE_FIELD
+
     let system, user
     if (videoType === 'narration') {
       parts.push(`镜头数量：${shotCount}个镜头`)
       system = NARRATION_SYSTEM
-      user = '请用旁白解说风格生成分镜脚本：\n\n' + parts.join('\n')
+      user = '请用旁白解说风格生成分镜脚本：\n\n' + parts.join('\n') + '\n' + craft
     } else if (narrativeStructure === 'qczh') {
       // 起承转合 needs at least one shot per movement.
       parts.push(`总镜头数：${Math.max(4, shotCount)}个（按起承转合四段分配，其中'转'只有1个镜头）`)
       system = QCZH_SYSTEM
-      user = '请用起承转合结构生成分镜脚本：\n\n' + parts.join('\n')
+      user = '请用起承转合结构生成分镜脚本：\n\n' + parts.join('\n') + '\n' + craft
     } else {
       parts.push(`镜头数量：${shotCount}个镜头`)
       system = STORYBOARD_SYSTEM
-      user = parts.join('\n')
+      user = parts.join('\n') + '\n' + craft
     }
 
     try {
@@ -179,6 +185,12 @@ async function promptRoutes(fastify) {
         } catch (e) {
           request.log.warn({ err: e }, 'dialogue pass failed; shots keep empty subtitles')
         }
+      }
+
+      // roll_type 兜底。解说纪录片全片没有 A-roll（无演员出镜说话），
+      // 叙事短片默认也按 B-roll 处理 —— 模型漏写时不至于留空。
+      for (const shot of storyboard.shots || []) {
+        shot.roll_type = shot.roll_type === 'a_roll' ? 'a_roll' : 'b_roll'
       }
 
       // 把 prompt_en 里的 <图片N> 提成结构化的 image_refs，导入分镜时才能把真实

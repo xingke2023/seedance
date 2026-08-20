@@ -22,6 +22,7 @@ export interface GeneratedShot {
   subtitle?: string;         // 叙事短片的台词，后端第二步补上
   stage?: string;            // 起承转合专有
   image_refs?: number[];     // 后端从 prompt_en 的 <图片N> 解析出来
+  roll_type?: 'a_roll' | 'b_roll';
 }
 export interface Storyboard {
   title?: string;
@@ -42,6 +43,8 @@ export interface ShotDraft {
   camera_movement: string;
   /** 1-based 素材编号，对应 prompt 里的 <图片N>；宿主据此把角色挂到分镜上。 */
   imageRefs: number[];
+  /** a_roll = 画面里有人正对镜头说话；其余都是 b_roll。 */
+  rollType: 'a_roll' | 'b_roll';
 }
 
 // Two orthogonal axes, matching the backend contract:
@@ -131,6 +134,7 @@ export function toShotDrafts(sb: Storyboard, videoType: VideoType): ShotDraft[] 
     lighting: s.lighting || '',
     camera_movement: s.camera_move || '',
     imageRefs: Array.isArray(s.image_refs) ? s.image_refs : [],
+    rollType: s.roll_type === 'a_roll' ? 'a_roll' : 'b_roll',
   }));
 }
 

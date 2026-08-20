@@ -146,6 +146,7 @@ export default function VideoEditorPage() {
   async function handleImportStoryboard(drafts: ShotDraft[]) {
     const withSubjects = drafts.map(d => ({
       ...d,
+      roll_type: d.rollType,
       // <图片N> 反查回主体，超出主体数量的编号指向参考素材，跳过
       subjects: d.imageRefs
         .map(n => subjectContext.subjectsWithImage[n - 1])

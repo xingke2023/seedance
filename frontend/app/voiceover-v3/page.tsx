@@ -28,6 +28,7 @@ interface VoiceoverShot {
   shot_size:      string;
   camera_movement:string;
   mood:           string;
+  roll_type?:     'a_roll' | 'b_roll';
   imageUrl?:      string;
   subjects?:      string[];
   camera_pan?:    number;
@@ -1268,6 +1269,7 @@ export default function VoiceoverPage() {
               duration: Number(s.duration) || 8,
               ratio: s.ratio || '',
               shot_size: s.shot_type || '',
+              roll_type: s.roll_type || undefined,
               camera_movement: s.camera_movement || '',
               mood: s.mood || '',
               imageUrl: s.image_url || '',
@@ -1381,6 +1383,7 @@ export default function VoiceoverPage() {
           subtitle: shot.subtitle || null,
           duration: shot.duration,
           shot_type: shot.shot_size || null,
+          roll_type: shot.roll_type || null,
           mood: shot.mood || null,
           camera_movement: shot.camera_movement || null,
           subjects: videoSubjects.map(vs => ({ label: vs.label, image_url: vs.image_url || '' })),
@@ -1639,6 +1642,7 @@ export default function VoiceoverPage() {
             shot_size:       d.shot_type,
             camera_movement: d.camera_movement,
             mood:            d.lighting,
+            roll_type:       d.rollType,
             subjects:        labels,
             shot_subjects:   labels.map((label, k) => ({ label, color: ['#3b82f6','#ef4444','#10b981','#f59e0b'][k % 4] })),
           };
@@ -2303,6 +2307,14 @@ export default function VoiceoverPage() {
                                   {shot.title}
                                 </span>
                                 {shot.shot_size && <span style={{ fontSize: 10, color: '#6b7280', background: '#f3f4f6', borderRadius: 3, padding: '1px 4px' }}>{shot.shot_size}</span>}
+                                {shot.roll_type && (
+                                  <span title={shot.roll_type === 'a_roll' ? '画面里有人正对镜头说话' : '补充画面，不含正面口播'}
+                                    style={{ fontSize: 10, borderRadius: 3, padding: '1px 4px',
+                                      color: shot.roll_type === 'a_roll' ? '#9a3412' : '#0f766e',
+                                      background: shot.roll_type === 'a_roll' ? '#ffedd5' : '#ccfbf1' }}>
+                                    {shot.roll_type === 'a_roll' ? 'A-roll' : 'B-roll'}
+                                  </span>
+                                )}
                                 {shot.mood && <span style={{ fontSize: 10, color: '#92400e', background: '#fef3c7', borderRadius: 3, padding: '1px 4px' }}>{shot.mood}</span>}
                                 {shot.camera_movement && <span style={{ fontSize: 10, color: '#1d4ed8', background: '#dbeafe', borderRadius: 3, padding: '1px 4px' }}>{shot.camera_movement}</span>}
                                 <span style={{ fontSize: 10, color: '#6b7280' }}>{shot.duration}s</span>
