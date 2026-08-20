@@ -1527,9 +1527,11 @@ ${script}`
     const body = request.body
     ;(async () => {
       try {
+        // inject 走的是完整路由表，这些路由注册在 /voiceover 前缀下 —— 注入裸
+        // '/merge' 会 404。用 fastify.prefix 拼，改前缀时不会再漏。
         const res = await fastify.inject({
           method: 'POST',
-          url: '/merge',
+          url: `${fastify.prefix}/merge`,
           payload: body,
         })
         const data = JSON.parse(res.payload)
