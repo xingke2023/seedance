@@ -122,9 +122,10 @@ function getVideoInfo(file: File): Promise<{ duration: number; width: number; he
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const SCRIPT_TABS = [
-  { value: 'script'   as const, label: '叙事短片' },
-  { value: 'subtitle' as const, label: '解说纪录片' },
+// 只影响分镜脚本生成（storyboard 的 video_type），不切换任何输入框
+const VIDEO_TYPES = [
+  { value: 'story'     as const, label: '叙事短片' },
+  { value: 'narration' as const, label: '解说纪录片' },
 ];
 
 const MODELS = [
@@ -1023,7 +1024,7 @@ export default function VoiceoverPage() {
 
   const [showMobileParams, setShowMobileParams] = useState(false);
   const [showExamples, setShowExamples] = useState(false);
-  const [scriptTab, setScriptTab] = useState<'script' | 'subtitle'>('script');
+  const [videoType, setVideoType] = useState<'story' | 'narration'>('story');
   const [showSubtitleTip, setShowSubtitleTip] = useState(false);
   const [showMediaTip, setShowMediaTip] = useState(false);
 
@@ -1939,7 +1940,6 @@ export default function VoiceoverPage() {
                 <p className={styles.cardTitle} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: scriptCollapsed ? 0 : 10 }}>
                   <span onClick={() => setScriptCollapsed(v => !v)} style={{ fontSize: 10, cursor: 'pointer', transition: 'transform 0.2s', transform: scriptCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}>▼</span>
                   <span onClick={() => setScriptCollapsed(v => !v)} style={{ cursor: 'pointer', color: '#111827' }}>视频概念描述</span>
-                  {scriptTab === 'script' && <>
                   <button type="button" onClick={() => setShowExamples(v => !v)}
                     style={{ display: 'inline-flex', alignItems: 'center', gap: 2, background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px', color: '#0d9488', fontSize: 13, fontWeight: 500 }}>
                     示例
@@ -1951,18 +1951,6 @@ export default function VoiceoverPage() {
                     style={{ fontSize: 11, padding: '2px 8px', border: '1px solid #6b7280', borderRadius: 5, background: '#fff', cursor: 'pointer', color: '#374151' }}>
                     AI辅助填写
                   </button>
-                  </>}
-                  {scriptTab === 'subtitle' && (
-                    <span style={{ position: 'relative', display: 'inline-block' }}>
-                      <span onClick={() => setShowSubtitleTip(v => !v)} style={{ fontSize: 11, fontWeight: 400, textDecoration: 'underline', cursor: 'pointer', color: '#6b7280' }}>说明</span>
-                      {showSubtitleTip && (
-                        <div style={{ position: 'absolute', left: 0, top: '100%', marginTop: 4, background: '#1e293b', color: '#f1f5f9', fontSize: 12, lineHeight: 1.6, padding: '10px 12px', borderRadius: 8, width: 260, zIndex: 100, boxShadow: '0 4px 16px rgba(0,0,0,0.2)', whiteSpace: 'normal' }}>
-                          如果字幕输入内容，那么生成视频的字幕严格按照字幕内容来生成，如果字幕内容为空，系统会根据视频需求来自动生成合适的字幕
-                          <span onClick={() => setShowSubtitleTip(false)} style={{ display: 'block', textAlign: 'right', marginTop: 6, cursor: 'pointer', color: '#94a3b8', fontSize: 11 }}>关闭</span>
-                        </div>
-                      )}
-                    </span>
-                  )}
                   <button type="button" onClick={() => { setSbOpen(v => !v); setScriptCollapsed(false); }}
                     style={{ fontSize: 11, padding: '2px 8px', border: '1px solid #2563eb', borderRadius: 5, background: sbOpen ? '#eff6ff' : '#fff', cursor: 'pointer', color: '#2563eb', fontWeight: 500, whiteSpace: 'nowrap' }}>
                     🎬 专业分镜生成
@@ -1972,17 +1960,16 @@ export default function VoiceoverPage() {
 
                   {!scriptCollapsed && (<>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 10 }}>
-                    {SCRIPT_TABS.map(opt => (
-                      <label key={opt.value} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 13, cursor: 'pointer', color: scriptTab === opt.value ? '#111827' : '#6b7280' }}>
-                        <input type="radio" name="scriptTab" value={opt.value} checked={scriptTab === opt.value}
-                          onChange={() => setScriptTab(opt.value)}
+                    {VIDEO_TYPES.map(opt => (
+                      <label key={opt.value} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 13, cursor: 'pointer', color: videoType === opt.value ? '#111827' : '#6b7280' }}>
+                        <input type="radio" name="videoType" value={opt.value} checked={videoType === opt.value}
+                          onChange={() => setVideoType(opt.value)}
                           style={{ accentColor: '#2563eb', cursor: 'pointer', margin: 0 }} />
                         {opt.label}
                       </label>
                     ))}
                   </div>
 
-                  {scriptTab === 'script' && (<>
                   {showAiInput && (
                     <div style={{ display: 'flex', gap: 6, marginBottom: 10, alignItems: 'center' }}>
                       <input type="text" value={aiTopic} onChange={e => setAiTopic(e.target.value)}
@@ -2025,8 +2012,37 @@ export default function VoiceoverPage() {
                       placeholder="输入视频概念描述…"
                       className={styles.textarea} style={{ fontFamily: 'inherit', fontSize: 13, border: '2px solid #000' }} />
                   </div>
+
+                  {/* 视频类型由上面的 radio 驱动，概念取自唯一那个 textarea；
+                      触发按钮在标题行的 <p> 里，面板不能嵌进去，所以在这里受控渲染。 */}
+                  <StoryboardGenerator
+                    concept={script}
+                    onConceptChange={v => {
+                      // 从案例库取材时回写到概念框；和手改一样，作废已生成的分镜
+                      setScript(v); setInitResult(null); setShots([]); setMergedVideoUrl(null);
+                    }}
+                    videoType={videoType}
+                    open={sbOpen}
+                    onOpenChange={setSbOpen}
+                    hideTrigger
+                    onGenerated={handleImportStoryboard}
+                  />
                   </>)}
-                  {scriptTab === 'subtitle' && (<>
+
+                {/* 字幕 / 配音（可选）— 独立于视频类型；解说纪录片生成的旁白会落进这里 */}
+                <div style={{ marginBottom: 14 }}>
+                  <p className={styles.cardTitle} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                    <span>字幕 / 配音（可选）</span>
+                    <span style={{ position: 'relative', display: 'inline-block' }}>
+                      <span onClick={() => setShowSubtitleTip(v => !v)} style={{ fontSize: 11, fontWeight: 400, textDecoration: 'underline', cursor: 'pointer', color: '#6b7280' }}>说明</span>
+                      {showSubtitleTip && (
+                        <div style={{ position: 'absolute', left: 0, top: '100%', marginTop: 4, background: '#1e293b', color: '#f1f5f9', fontSize: 12, lineHeight: 1.6, padding: '10px 12px', borderRadius: 8, width: 260, zIndex: 100, boxShadow: '0 4px 16px rgba(0,0,0,0.2)', whiteSpace: 'normal' }}>
+                          如果字幕输入内容，那么生成视频的字幕严格按照字幕内容来生成，如果字幕内容为空，系统会根据视频需求来自动生成合适的字幕
+                          <span onClick={() => setShowSubtitleTip(false)} style={{ display: 'block', textAlign: 'right', marginTop: 6, cursor: 'pointer', color: '#94a3b8', fontSize: 11 }}>关闭</span>
+                        </div>
+                      )}
+                    </span>
+                  </p>
                   <div style={{ position: 'relative', marginBottom: 10 }}>
                     {subtitleInput.trim() && (
                       <button type="button" onClick={() => { setSubtitleInput(''); setInitResult(null); setShots([]); setMergedVideoUrl(null); }}
@@ -2052,25 +2068,7 @@ export default function VoiceoverPage() {
                       <audio controls src={audioUrl} style={{ height: 28, flex: 1, minWidth: 120 }} />
                     )}
                   </div>
-                  </>)}
-
-                  {/* 视频类型由上面的「叙事短片/解说纪录片」radio 驱动，生成器不再自带那一栏。
-                      触发按钮在标题行的 <p> 里，面板不能嵌进去，所以在这里受控渲染。 */}
-                  <StoryboardGenerator
-                    concept={scriptTab === 'subtitle' ? subtitleInput : script}
-                    onConceptChange={v => {
-                      // 从案例库取材时回写到页面上那个框；和手改概念一样，作废已生成的分镜
-                      if (scriptTab === 'subtitle') { setSubtitleInput(v); setAudioUrl(null); }
-                      else setScript(v);
-                      setInitResult(null); setShots([]); setMergedVideoUrl(null);
-                    }}
-                    videoType={scriptTab === 'subtitle' ? 'narration' : 'story'}
-                    open={sbOpen}
-                    onOpenChange={setSbOpen}
-                    hideTrigger
-                    onGenerated={handleImportStoryboard}
-                  />
-                  </>)}
+                </div>
 
                   {/* 剧本分析按钮 */}
                   <div style={{ marginTop: 10, marginBottom: 6 }}>
