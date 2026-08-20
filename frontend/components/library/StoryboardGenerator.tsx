@@ -288,23 +288,19 @@ export default function StoryboardGenerator({
     if (!ownConcept.trim() && initialConcept.trim()) setOwnConcept(initialConcept);
   }, [open, conceptControlled, ownConcept, initialConcept]);
 
-  // Esc to close + body scroll lock while the dialog is up.
+  // Esc closes. No body scroll lock — it floats over the page rather than
+  // blocking it, so the page underneath stays scrollable.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
     document.addEventListener('keydown', onKey);
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.removeEventListener('keydown', onKey);
-      document.body.style.overflow = prevOverflow;
-    };
+    return () => document.removeEventListener('keydown', onKey);
   }, [open]);
 
   const dialog = (
     <div className={styles.backdrop}
       onMouseDown={e => { if (e.target === e.currentTarget) setOpen(false); }}>
-      <div className={styles.dialog} role="dialog" aria-modal="true" aria-label="专业分镜生成">
+      <div className={styles.dialog} role="dialog" aria-label="专业分镜生成">
         <div className={styles.dialogHead}>
           <span className={styles.dialogTitle}>🎬 专业分镜生成</span>
           <button type="button" className={styles.close} onClick={() => setOpen(false)} aria-label="关闭">×</button>
@@ -438,6 +434,7 @@ export default function StoryboardGenerator({
         </button>
       )}
       {/* Portalled so page-level sticky headers / overflow containers can't clip it. */}
+      {/* Floating, not modal: no dim layer, page stays scrollable behind it. */}
       {mounted && open && createPortal(dialog, document.body)}
     </div>
   );

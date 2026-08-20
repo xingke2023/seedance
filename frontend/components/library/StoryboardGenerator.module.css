@@ -11,13 +11,16 @@
 .backdrop {
   position: fixed; inset: 0; z-index: 1000;
   display: flex; align-items: center; justify-content: center;
-  padding: 24px; background: rgba(15, 23, 42, .45);
+  padding: 24px;
+  /* Transparent — this layer only catches outside clicks. A dimmed full-screen
+     overlay made a small form feel like a takeover. */
+  background: transparent;
 }
 .dialog {
   display: flex; flex-direction: column;
-  width: 100%; max-width: 760px; max-height: 88vh;
-  background: #fafafa; border-radius: 12px;
-  box-shadow: 0 20px 50px rgba(0, 0, 0, .28);
+  width: 100%; max-width: 600px; max-height: 72vh;
+  background: #fafafa; border: 1px solid #d1d5db; border-radius: 12px;
+  box-shadow: 0 16px 40px rgba(15, 23, 42, .22);
   overflow: hidden;
 }
 .dialogHead {
@@ -130,9 +133,9 @@
   .fieldGrid { grid-template-columns: 1fr 1fr; }
   .fieldWide { grid-column: span 2; }
   .struct { min-width: 100%; }
-  /* Full-bleed sheet on phones — a centred card wastes most of the screen. */
-  .backdrop { padding: 0; align-items: stretch; }
-  .dialog { max-width: none; max-height: none; height: 100%; border-radius: 0; }
+  /* Still a floating card on phones, just with tighter margins. */
+  .backdrop { padding: 12px; }
+  .dialog { max-height: 82vh; }
   .dialogBody { padding: 14px; }
 }
 
