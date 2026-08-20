@@ -7,7 +7,10 @@ import dynamic from 'next/dynamic';
 import { api } from '@/lib/api';
 import { CameraState, ShotSubject, ProjectSubject } from '@/components/video-editor/types';
 import styles from './page.module.css';
-import StoryboardGenerator, { type ShotDraft } from '@/components/library/StoryboardGenerator';
+import StoryboardGenerator, {
+  toShotDrafts, DEFAULT_STORYBOARD_SETTINGS,
+  type Storyboard, type StoryboardSettings,
+} from '@/components/library/StoryboardGenerator';
 
 const CameraEditor = dynamic(() => import('@/components/video-editor/CameraEditor'), { ssr: false });
 
@@ -1059,6 +1062,7 @@ export default function VoiceoverPage() {
   const [mediaCollapsed, setMediaCollapsed] = useState(false);
   const [scriptCollapsed, setScriptCollapsed] = useState(false);
   const [sbOpen, setSbOpen] = useState(false);
+  const [sbSettings, setSbSettings] = useState<StoryboardSettings>(DEFAULT_STORYBOARD_SETTINGS);
 
   // 唯一那个 textarea 始终写 script，两种视频类型共用同一份文本。
   // 选解说纪录片时把它镜像进 subtitleInput —— 那份文本本身就是字幕/解说词。
@@ -1576,52 +1580,6 @@ export default function VoiceoverPage() {
     } finally { setAnalyzingSubjects(false); }
   }
 
-  // Import from the ported prompt engine (专业分镜). Mirrors handleInit's reset so a
-  // re-import never leaves stale tasks or a merged video from the previous run.
-  async function handleImportStoryboard(drafts: ShotDraft[]) {
-    setInitError('');
-    setTasks({}); setMergedVideoUrl(null); setAudioUrl(null);
-    setDirtyShotIdxs(new Set());
-    Object.values(pollRefs.current).forEach(clearInterval);
-    pollRefs.current = {};
-
-    const imported: VoiceoverShot[] = drafts.map((d, i) => {
-      // <图片N> 是 1-based，对应 subjectContext 里带图角色的顺序；
-      // 超出角色数量的编号指向参考素材，不是角色，跳过。
-      const labels = d.imageRefs
-        .map(n => subjectContext.subjectsWithImage[n - 1])
-        .filter(Boolean)
-        .map(sub => scriptAnalysis.find(a => a.linkedSubjectId === sub.id)?.label || sub.label);
-      return {
-        shot_number:     i + 1,
-        title:           d.title || `分镜 ${i + 1}`,
-        subtitle:        d.subtitle,
-        description:     d.description,
-        prompt:          d.prompt,
-        duration:        d.duration,
-        ratio,
-        shot_size:       d.shot_type,
-        camera_movement: d.camera_movement,
-        mood:            d.lighting,
-        subjects:        labels,
-        shot_subjects:   labels.map((label, k) => ({ label, color: ['#3b82f6','#ef4444','#10b981','#f59e0b'][k % 4] })),
-      };
-    });
-
-    setShots(imported);
-    setInitResult({
-      autoShotCount: imported.length,
-      shotCount:     imported.length,
-      shots:         imported,
-      totalVideoDuration: imported.reduce((sum, sh) => sum + (sh.duration || 0), 0),
-    });
-    batchSeedRef.current = seed ?? Math.floor(Math.random() * 2147483647);
-
-    // 解说词模式产出的是成品旁白 — 灌进字幕框，用户可直接点「生成配音」走 TTS
-    const narration = imported.map(sh => sh.subtitle).filter(Boolean).join('');
-    if (narration && !subtitleInput.trim()) setSubtitleInput(narration);
-  }
-
   async function handleInit() {
     if (!script.trim() && !subtitleInput.trim()) return;
     setInitError(''); setIniting(true);
@@ -1641,7 +1599,52 @@ export default function VoiceoverPage() {
       const finalSubjectDefs = subjectContext.characterDefs;
       const imageDescriptions = subjectContext.imageDescriptions || undefined;
 
-      const result = await api.post<InitResult>('/voiceover/init', { script: script.trim(), style, ratio, imageCount, subjectImageCount: subjectImagesCount, videoCount, audioCount, subjectDefinitions: finalSubjectDefs || undefined, imageDescriptions, subtitleMode, subtitleInput: subtitleInput.trim() || undefined });
+      // 分镜脚本统一由「专业分镜生成」的提示词引擎产出，参数来自那个浮窗。
+      // 下游（TTS、按语音重算时长、落库）只认 result.shots，换生成源不受影响。
+      const sb = await api.post<{ result: Storyboard }>('/prompt/storyboard', {
+        concept: conceptText.trim(),
+        creative_goal:       sbSettings.creativeGoal,
+        target_audience:     sbSettings.audience,
+        overall_tone:        sbSettings.tone,
+        key_messages:        sbSettings.keyMessages,
+        shot_count:          sbSettings.shotCount,
+        duration_total:      sbSettings.durationTotal,
+        narrative_structure: sbSettings.narrative,
+        video_type:          videoType,
+        subject_definitions: finalSubjectDefs,
+        image_descriptions:  imageDescriptions || '',
+      });
+
+      const drafts = toShotDrafts(sb.result, videoType);
+      if (drafts.length === 0) throw new Error('模型没有返回任何分镜');
+
+      const result: InitResult = {
+        autoShotCount: drafts.length,
+        shotCount:     drafts.length,
+        shots: drafts.map((d, i) => {
+          // <图片N> 是 1-based，对应 subjectContext 里带图角色的顺序；
+          // 超出角色数量的编号指向参考素材，不是角色，跳过。
+          const labels = d.imageRefs
+            .map(n => subjectContext.subjectsWithImage[n - 1])
+            .filter(Boolean)
+            .map(sub => scriptAnalysis.find(a => a.linkedSubjectId === sub.id)?.label || sub.label);
+          return {
+            shot_number: i + 1,
+            title:       d.title || `分镜 ${i + 1}`,
+            subtitle:    d.subtitle,
+            description: d.description,
+            prompt:      d.prompt,
+            duration:    d.duration,
+            ratio,
+            shot_size:       d.shot_type,
+            camera_movement: d.camera_movement,
+            mood:            d.lighting,
+            subjects:        labels,
+            shot_subjects:   labels.map((label, k) => ({ label, color: ['#3b82f6','#ef4444','#10b981','#f59e0b'][k % 4] })),
+          };
+        }),
+        totalVideoDuration: drafts.reduce((a, d) => a + d.duration, 0),
+      };
       setInitResult(result);
       setShots(result.shots);
       if (!subtitleInput.trim() && result.shots.length > 0) {
@@ -2051,14 +2054,11 @@ export default function VoiceoverPage() {
                   {/* 弹窗经 portal 挂到 body，这里只是受控挂载点；
                       视频类型由上面的 radio 驱动，概念取自唯一那个 textarea。 */}
                   <StoryboardGenerator
-                    concept={conceptText}
-                    subjectDefinitions={subjectContext.characterDefs}
-                    imageDescriptions={subjectContext.imageDescriptions}
                     videoType={videoType}
                     open={sbOpen}
                     onOpenChange={setSbOpen}
                     hideTrigger
-                    onGenerated={handleImportStoryboard}
+                    onSettingsChange={setSbSettings}
                   />
                   </>)}
 
@@ -2256,7 +2256,7 @@ export default function VoiceoverPage() {
                         <span className={styles.spinner} style={{ borderColor: '#5eead4', borderTopColor: '#fff' }} />
                         分镜进行中...
                       </span>
-                    ) : anyUploading ? '素材上传中，请等待…' : mediaDescMissing ? '请填写素材说明' : initResult ? '重新生成分镜脚本' : '一键生成分镜'}
+                    ) : anyUploading ? '素材上传中，请等待…' : mediaDescMissing ? '请填写素材说明' : initResult ? '重新生成分镜脚本' : '生成分镜脚本'}
                   </button>
                   </div>
               </div>

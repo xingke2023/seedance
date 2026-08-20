@@ -7,7 +7,10 @@ import { api } from '@/lib/api';
 import { Shot, Video, ShotSubject, MODELS, RATIOS, AZURE_VOICES, MOVEMENT_TYPES, SHOT_TYPES, LIGHTING_TYPES, CameraState, ProjectSubject } from '@/components/video-editor/types';
 import CameraEditor from '@/components/video-editor/CameraEditor';
 import styles from './page.module.css';
-import StoryboardGenerator, { type ShotDraft } from '@/components/library/StoryboardGenerator';
+import StoryboardGenerator, {
+  toShotDrafts, DEFAULT_STORYBOARD_SETTINGS,
+  type Storyboard, type StoryboardSettings, type ShotDraft,
+} from '@/components/library/StoryboardGenerator';
 import LibraryPanel from '@/components/library/LibraryPanel';
 
 interface VideoListItem {
@@ -45,6 +48,7 @@ export default function VideoEditorPage() {
   const [model, setModel] = useState('doubao-seedance-2-0');
   const [region, setRegion] = useState<'overseas' | 'cn'>('cn');
   const [initing, setIniting] = useState(false);
+  const [sbSettings, setSbSettings] = useState<StoryboardSettings>(DEFAULT_STORYBOARD_SETTINGS);
   const [generating, setGenerating] = useState<Set<string>>(new Set());
   const [expandedShot, setExpandedShot] = useState<string | null>(null);
   const [cameraOpen, setCameraOpen] = useState<string | null>(null);
@@ -103,15 +107,25 @@ export default function VideoEditorPage() {
     if (!script.trim()) return;
     setIniting(true);
     try {
-      const res = await api.post<{ shots: any[] }>('/voiceover/init', {
-        script, style, ratio,
-        duration: Math.round(script.replace(/\s/g, '').length / 3.5),
+      // 与 voiceover-v3 同一个引擎，参数来自「专业分镜生成」浮窗
+      const sb = await api.post<{ result: Storyboard }>('/prompt/storyboard', {
+        concept: script.trim(),
+        creative_goal:       sbSettings.creativeGoal,
+        target_audience:     sbSettings.audience,
+        overall_tone:        sbSettings.tone,
+        key_messages:        sbSettings.keyMessages,
+        shot_count:          sbSettings.shotCount,
+        duration_total:      sbSettings.durationTotal,
+        narrative_structure: sbSettings.narrative,
+        video_type:          sbSettings.videoType,
+        subject_definitions: subjectContext.characterDefs,
+        image_descriptions:  subjectContext.imageDescriptions,
       });
-      if (res?.shots) {
-        const created = await api.post<Shot[]>(`/videos/${videoId}/shots`, { shots: res.shots });
-        if (created) setShots(created);
-      }
-    } catch {}
+      const drafts = toShotDrafts(sb.result, sbSettings.videoType);
+      if (drafts.length > 0) await handleImportStoryboard(drafts);
+    } catch (e) {
+      console.warn('分镜生成失败:', e);
+    }
     setIniting(false);
   }
 
@@ -140,6 +154,7 @@ export default function VideoEditorPage() {
     }));
     const created = await api.post<Shot[]>(`/videos/${videoId}/shots`, { shots: withSubjects });
     if (created) setShots(prev => [...prev, ...created]);
+
   }
 
   async function handleShotUpdate(shotId: string, fields: Partial<Shot>) {
@@ -341,17 +356,14 @@ export default function VideoEditorPage() {
         <div className={styles.storyboardHeader}>
           <span className={styles.fieldLabel}>分镜 ({shots.length})</span>
           <button className={styles.primaryBtn} onClick={handleGenerateStoryboard} disabled={initing || !script.trim()}>
-            {initing ? '生成中...' : '一键生成分镜'}
+            {initing ? '生成中...' : shots.length ? '重新生成分镜脚本' : '生成分镜脚本'}
           </button>
         </div>
 
-        <StoryboardGenerator initialConcept={script}
-          subjectDefinitions={subjectContext.characterDefs}
-          imageDescriptions={subjectContext.imageDescriptions}
-          onGenerated={handleImportStoryboard} />
+        <StoryboardGenerator onSettingsChange={setSbSettings} />
 
         {shots.length === 0 ? (
-          <div className={styles.emptyShots}>输入脚本后，点击「一键生成分镜」自动规划</div>
+          <div className={styles.emptyShots}>输入脚本后，点击「生成分镜脚本」自动规划</div>
         ) : (
           <div className={styles.tableWrap}>
             <table className={styles.shotTable}>
