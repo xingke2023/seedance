@@ -129,12 +129,12 @@ export default function VideoEditorPage() {
     setIniting(false);
   }
 
-  // 与 voiceover-v3 同一套 <图片N> 编号规则：带图主体按顺序 1..N
+  // 与 voiceover-v3 同一套 @图片N 编号规则：带图主体按顺序 1..N
   const subjectContext = useMemo(() => {
     const withImage = videoSubjects.filter(sub => sub.image_url);
     return {
       characterDefs: withImage
-        .map((sub, i) => `角色「${sub.label}」绑定<图片${i + 1}>，外貌描述：${sub.description || '见图片'}`)
+        .map((sub, i) => `角色「${sub.label}」绑定@图片${i + 1}，外貌描述：${sub.description || '见图片'}`)
         .join('\n'),
       imageDescriptions: withImage
         .map((sub, i) => `图片${i + 1}：角色「${sub.label}」— ${sub.description || '见图片'}`)
@@ -147,7 +147,7 @@ export default function VideoEditorPage() {
     const withSubjects = drafts.map(d => ({
       ...d,
       roll_type: d.rollType,
-      // <图片N> 反查回主体，超出主体数量的编号指向参考素材，跳过
+      // @图片N 反查回主体，超出主体数量的编号指向参考素材，跳过
       subjects: d.imageRefs
         .map(n => subjectContext.subjectsWithImage[n - 1])
         .filter(Boolean)

@@ -29,6 +29,7 @@ interface VoiceoverShot {
   camera_movement:string;
   mood:           string;
   roll_type?:     'a_roll' | 'b_roll';
+  voice_style?:   string;   // 解说纪录片逐镜情绪 → Azure express-as
   imageUrl?:      string;
   subjects?:      string[];
   camera_pan?:    number;
@@ -189,6 +190,15 @@ const SUBTITLE_FONTS = [
   { value: 'Liberation Sans',        label: 'Liberation Sans' },
 ];
 
+// 逐镜情绪标签（解说纪录片）—— 值来自 /prompt/storyboard 的 voice_style
+const VOICE_STYLE_TAGS: Record<string, { label: string; fg: string; bg: string }> = {
+  calm:      { label: '平稳', fg: '#475569', bg: '#f1f5f9' },
+  serious:   { label: '严肃', fg: '#7c2d12', bg: '#fef3c7' },
+  worried:   { label: '担忧', fg: '#1e40af', bg: '#dbeafe' },
+  warm:      { label: '温暖', fg: '#9d174d', bg: '#fce7f3' },
+  uplifting: { label: '升华', fg: '#166534', bg: '#dcfce7' },
+};
+
 const SUBTITLE_POSITIONS = [
   { value: 'bottom', label: '底部' },
   { value: 'top',    label: '顶部' },
@@ -268,6 +278,49 @@ const CAMERA_MOVEMENTS = [
   { value: '降', label: '降' },
   { value: '环绕', label: '环绕' },
 ];
+
+// 模型给的是影视术语代码（MCU / WS）和自由英文短语（handheld, unstabilized…），
+// 而这两个字段在卡片里是 <select>：值对不上任何 option 就渲染成空白。
+// 所以导入时归一化到上面的选项；实在认不出来的原样留着（select 那边会补一个 option）。
+const SHOT_SIZE_RULES: Array<[RegExp, string]> = [
+  [/\b(ecu|extreme close)/i, '特写'],
+  [/\b(mcu|medium close)/i,  '近景'],
+  [/\b(cu|close[- ]?up)\b/i, '特写'],
+  [/\b(ews|els|extreme (wide|long))/i, '远景'],
+  [/\b(ws|ls|wide|long) shot\b/i, '全景'],
+  [/\b(ws|ls)\b/i, '全景'],
+  [/\b(ms|mid|medium)\b/i, '中景'],
+];
+function normalizeShotSize(raw: string): string {
+  const v = (raw || '').trim();
+  if (!v) return '';
+  if (SHOT_SIZES.some(o => o.value === v)) return v;          // 已经是中文
+  for (const [re, label] of SHOT_SIZE_RULES) if (re.test(v)) return label;
+  return v;
+}
+
+// 先长后短：push in 必须排在 in 前面，否则 zoom in / push in 会互相吃掉
+// 连字符必须容忍：模型写 push-in 的频率和 push in 一样高，
+// 漏判会一路掉到最后那条「固定」，把推镜标成不动
+const CAMERA_MOVE_RULES: Array<[RegExp, string]> = [
+  [/(push[- ]?in|dolly[- ]?in|zoom[- ]?in|move (in|closer)|creep[- ]?in|drift (in|closer))/i, '推'],
+  [/(pull[- ]?(out|back)|dolly[- ]?out|zoom[- ]?out|move away|drift back)/i, '拉'],
+  [/(orbit|arc[- ]|circle|around the|revolve)/i, '环绕'],
+  [/(crane[- ]?up|boom[- ]?up|rise|tilt[- ]?up|lift)/i, '升'],
+  [/(crane[- ]?down|boom[- ]?down|descend|tilt[- ]?down|lower)/i, '降'],
+  [/(follow|tracking (the|her|him)|trail)/i, '跟'],
+  [/(track|dolly|truck|slide|lateral|pedestal|move (left|right))/i, '移'],
+  [/(pan\b|tilt\b|whip|swivel)/i, '摇'],
+  [/(static|locked|fixed|tripod|handheld|steady|no camera|unstabilized)/i, '固定'],
+];
+function normalizeCameraMove(raw: string): string {
+  const v = (raw || '').trim();
+  if (!v) return '';
+  if (CAMERA_MOVEMENTS.some(o => o.value === v)) return v;
+  for (const [re, label] of CAMERA_MOVE_RULES) if (re.test(v)) return label;
+  return v;
+}
+
 const STATUS_LABELS: Record<string, string> = {
   running:   '生成中…',
   queued:    '队列中…',
@@ -995,7 +1048,10 @@ export default function VoiceoverPage() {
 
   const [model, setModel]               = useState(MODELS[0].value);
   const [resolution, setResolution]     = useState('720p');
-  const [generateAudio, setGenerateAudio] = useState(false);
+  // 默认开：页面初始就是叙事短片，对白靠 Seedance 自己出人声（对白已写进 prompt），
+  // 关掉就只剩哑画面。切到解说纪录片会自动关（见 videoType 那个 effect）；
+  // 已保存的视频仍以库里 params.generateAudio 为准。
+  const [generateAudio, setGenerateAudio] = useState(true);
   const [watermark, setWatermark]         = useState(false);
   const [seed, setSeed]                   = useState<number | null>(null);
   const [serviceTier, setServiceTier]     = useState('default');
@@ -1014,6 +1070,10 @@ export default function VoiceoverPage() {
   const [audioDuration, setAudioDuration] = useState<number>(0);
   const [wordBoundaries, setWordBoundaries] = useState<Array<{text: string; offset: number; duration: number}>>([]);
   const [ttsLoading, setTtsLoading]       = useState(false);
+  // 换音色重配后的提示：哪几镜的时长变化太大，合并贴不齐，必须重新生成
+  const [ttsNotice, setTtsNotice]         = useState('');
+  // 分镜任务已经跑了多少秒（后端给的，回到页面时也能接着显示）
+  const [initElapsed, setInitElapsed]     = useState(0);
   const [tasks, setTasks]                 = useState<Record<number, ShotTask>>({});
   const pollRefs = useRef<Record<number, ReturnType<typeof setInterval>>>({});
   const mediaInputRef = useRef<HTMLInputElement>(null);
@@ -1078,17 +1138,20 @@ export default function VoiceoverPage() {
   // 写进 subtitleInput 的字幕又覆盖掉；日常输入由 setConceptText 负责镜像。
   //   解说纪录片 → 这份文本就是字幕
   //   叙事短片   → 字幕为空，交给后端按脚本自动生成
-  // 只认用户操作，不在首次挂载时跑，否则会清掉从库里读出来的字幕。
+  // generate_audio 同理：叙事短片的人声是 Seedance 按 prompt 里的对白生成的，必须开；
+  // 解说纪录片的成品音轨来自 Azure 旁白，视频自带音频用不上，开了是白花钱。
+  // 只认用户操作，不在首次挂载时跑，否则会清掉从库里读出来的字幕和参数。
   const prevVideoTypeRef = useRef(videoType);
   useEffect(() => {
     const prev = prevVideoTypeRef.current;
     if (prev === videoType) return;
     prevVideoTypeRef.current = videoType;
     setSubtitleInput(videoType === 'narration' ? script : '');
+    setGenerateAudio(videoType !== 'narration');
     setAudioUrl(null);
   }, [videoType, script]);
 
-  // 角色/素材上下文。两条分镜链路共用同一份 <图片N> 编号 —— 各算各的迟早漂移，
+  // 角色/素材上下文。两条分镜链路共用同一份 @图片N 编号 —— 各算各的迟早漂移，
   // 编号一错，提示词里的角色锚定就指到别的图上去了。
   const subjectContext = useMemo(() => {
     const readyImages = mediaItems.filter(m => m.url && !m.uploading && m.mediaType === 'image');
@@ -1101,12 +1164,18 @@ export default function VoiceoverPage() {
       return a ? `${a.appearance}；${a.personality}` : (s.description || '');
     };
     const characterLines = [
-      ...withImage.map((s, i) => `角色「${nameOf(s)}」绑定<图片${i + 1}>，外貌描述：${s.description || '见图片'}`),
+      ...withImage.map((s, i) => `角色「${nameOf(s)}」绑定@图片${i + 1}，外貌描述：${s.description || '见图片'}`),
       ...withoutImage.map(s => `角色「${nameOf(s)}」，外貌描述：${s.description || '未提供'}`),
     ];
+    // 素材编号按类型各排各的 —— content 里图片/视频/音频是分开计数的，
+    // Seedance 提示词里用 图片N / 视频N / 音频N 指代第 N 个该类型素材。
+    const readyVideos = mediaItems.filter(m => m.url && !m.uploading && m.mediaType === 'video');
+    const readyAudios = mediaItems.filter(m => m.url && !m.uploading && m.mediaType === 'audio');
     const descLines = [
       ...withImage.map((s, i) => `图片${i + 1}：角色「${nameOf(s)}」— ${descOf(s) || '见图片'}`),
       ...readyImages.map((m, i) => `图片${withImage.length + i + 1}：参考素材「${m.name || '素材'}」— ${m.description || ''}`),
+      ...readyVideos.map((m, i) => `视频${i + 1}：参考视频「${m.name || '素材'}」— ${m.description || ''}`),
+      ...readyAudios.map((m, i) => `音频${i + 1}：参考音频「${m.name || '素材'}」— ${m.description || ''}`),
     ];
     return {
       characterDefs:     characterLines.join('\n'),
@@ -1255,6 +1324,20 @@ export default function VoiceoverPage() {
             if (Array.isArray(data.params.scriptAnalysis) && data.params.scriptAnalysis.length > 0) {
               setScriptAnalysis(data.params.scriptAnalysis);
             }
+            // 视频类型也要恢复 —— 不存的话重开永远回到叙事短片，而 generateAudio
+            // 却从库里读了出来，两者就对不上了。老数据没存过这个字段，按 subtitle_input
+            // 反推（解说纪录片的字幕就是那份文本，叙事短片的字幕为空）。
+            const savedType: 'story' | 'narration' =
+              data.params.videoType === 'story' || data.params.videoType === 'narration'
+                ? data.params.videoType
+                : ((data.subtitle_input || '').trim() ? 'narration' : 'story');
+            setVideoType(savedType);
+            // 同步 ref，否则恢复类型会被当成「用户切换」，把刚读出来的字幕清掉
+            prevVideoTypeRef.current = savedType;
+            // 老数据里的 generateAudio 是当年的默认值留下的（那时默认 false），
+            // 和视频类型对不上就以类型为准：叙事短片的人声来自 Seedance 按对白生成，
+            // 关掉只会得到哑画面。存过 videoType 的行说明是新数据，尊重用户的开关。
+            if (data.params.videoType === undefined) setGenerateAudio(savedType !== 'narration');
           }
           if (data.seed != null) { batchSeedRef.current = data.seed; setSeed(data.seed); }
           // Load shots from DB
@@ -1268,9 +1351,12 @@ export default function VoiceoverPage() {
               prompt: s.prompt || '',
               duration: Number(s.duration) || 8,
               ratio: s.ratio || '',
-              shot_size: s.shot_type || '',
+              // 老数据里存的是模型原样给的英文（camera_movement）或 null（shot_type），
+              // 读出来也归一化一次，不用迁库
+              shot_size: normalizeShotSize(s.shot_type || ''),
               roll_type: s.roll_type || undefined,
-              camera_movement: s.camera_movement || '',
+              voice_style: s.voice_style || undefined,
+              camera_movement: normalizeCameraMove(s.camera_movement || ''),
               mood: s.mood || '',
               imageUrl: s.image_url || '',
               subjects: Array.isArray(s.subjects) ? s.subjects.map((sub: any) => typeof sub === 'string' ? sub : sub.label) : [],
@@ -1351,7 +1437,7 @@ export default function VoiceoverPage() {
     if (!dataLoaded || !videoId) return;
     setVideoDirty(true);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [script, subtitleInput, style, ratio, voice, model, resolution, generateAudio, watermark, seed, serviceTier, returnLastFrame, draft, webSearch, subtitleStyle, banner, bannerStyle, videoSubjects, mediaItems]);
+  }, [script, subtitleInput, style, ratio, voice, model, resolution, generateAudio, watermark, seed, serviceTier, returnLastFrame, draft, webSearch, videoType, subtitleStyle, banner, bannerStyle, videoSubjects, mediaItems]);
 
   function markShotDirty(idx: number) {
     setDirtyShotIdxs(prev => new Set(prev).add(idx));
@@ -1366,7 +1452,7 @@ export default function VoiceoverPage() {
       if (videoDirty) {
         Object.assign(payload, { script, subtitle_input: subtitleInput, style, ratio, voice });
       }
-      payload.params = { model, resolution, generateAudio, watermark, seed, serviceTier, returnLastFrame, draft, webSearch, subtitleStyle, banner, bannerStyle, scriptAnalysis: scriptAnalysis.map(s => ({ label: s.label, type: s.type, appearance: s.appearance, personality: s.personality, linkedSubjectId: s.linkedSubjectId })) };
+      payload.params = { model, resolution, generateAudio, watermark, seed, serviceTier, returnLastFrame, draft, webSearch, videoType, subtitleStyle, banner, bannerStyle, scriptAnalysis: scriptAnalysis.map(s => ({ label: s.label, type: s.type, appearance: s.appearance, personality: s.personality, linkedSubjectId: s.linkedSubjectId })) };
       payload.subject_ids = videoSubjects.map(s => s.id);
       payload.media_items = mediaItems.map(m => ({ media_type: m.mediaType, url: m.url, name: m.name, description: m.description }));
       promises.push(api.put(`/videos/${videoId}`, payload).catch(() => {}));
@@ -1384,6 +1470,7 @@ export default function VoiceoverPage() {
           duration: shot.duration,
           shot_type: shot.shot_size || null,
           roll_type: shot.roll_type || null,
+          voice_style: shot.voice_style || null,
           mood: shot.mood || null,
           camera_movement: shot.camera_movement || null,
           subjects: videoSubjects.map(vs => ({ label: vs.label, image_url: vs.image_url || '' })),
@@ -1585,7 +1672,7 @@ export default function VoiceoverPage() {
 
   async function handleInit() {
     if (!script.trim() && !subtitleInput.trim()) return;
-    setInitError(''); setIniting(true);
+    setInitError(''); setIniting(true); setInitElapsed(0);
     setInitResult(null); setShots([]); setTasks({}); setMergedVideoUrl(null); setAudioUrl(null);
     setDirtyShotIdxs(new Set());
     batchSeedRef.current = null;
@@ -1602,9 +1689,7 @@ export default function VoiceoverPage() {
       const finalSubjectDefs = subjectContext.characterDefs;
       const imageDescriptions = subjectContext.imageDescriptions || undefined;
 
-      // 分镜脚本统一由「专业分镜生成」的提示词引擎产出，参数来自那个浮窗。
-      // 下游（TTS、按语音重算时长、落库）只认 result.shots，换生成源不受影响。
-      const sb = await api.post<{ result: Storyboard }>('/prompt/storyboard', {
+      const jobId = await startStoryboardJob({
         concept: conceptText.trim(),
         creative_goal:       sbSettings.creativeGoal,
         target_audience:     sbSettings.audience,
@@ -1614,131 +1699,236 @@ export default function VoiceoverPage() {
         duration_total:      sbSettings.durationTotal,
         narrative_structure: sbSettings.narrative,
         video_type:          videoType,
+        ratio,                              // 画幅决定装载竖屏还是横屏那套手艺
+        style,                              // 视觉风格，不发过去模型会跟着参考图漂
         subject_definitions: finalSubjectDefs,
         image_descriptions:  imageDescriptions || '',
       });
-
-      const drafts = toShotDrafts(sb.result, videoType);
-      if (drafts.length === 0) throw new Error('模型没有返回任何分镜');
-
-      const result: InitResult = {
-        autoShotCount: drafts.length,
-        shotCount:     drafts.length,
-        shots: drafts.map((d, i) => {
-          // <图片N> 是 1-based，对应 subjectContext 里带图角色的顺序；
-          // 超出角色数量的编号指向参考素材，不是角色，跳过。
-          const labels = d.imageRefs
-            .map(n => subjectContext.subjectsWithImage[n - 1])
-            .filter(Boolean)
-            .map(sub => scriptAnalysis.find(a => a.linkedSubjectId === sub.id)?.label || sub.label);
-          return {
-            shot_number: i + 1,
-            title:       d.title || `分镜 ${i + 1}`,
-            subtitle:    d.subtitle,
-            description: d.description,
-            prompt:      d.prompt,
-            duration:    d.duration,
-            ratio,
-            shot_size:       d.shot_type,
-            camera_movement: d.camera_movement,
-            mood:            d.lighting,
-            roll_type:       d.rollType,
-            subjects:        labels,
-            shot_subjects:   labels.map((label, k) => ({ label, color: ['#3b82f6','#ef4444','#10b981','#f59e0b'][k % 4] })),
-          };
-        }),
-        totalVideoDuration: drafts.reduce((a, d) => a + d.duration, 0),
-      };
-      setInitResult(result);
-      setShots(result.shots);
-      if (!subtitleInput.trim() && result.shots.length > 0) {
-        setSubtitleInput(result.shots.map(s => s.subtitle).join(''));
-      }
-      batchSeedRef.current = seed ?? Math.floor(Math.random() * 2147483647);
-
-      // TTS: 生成语音并按实际时长更新各分镜 duration
-      const ttsScript = subtitleInput.trim() || result.shots.map(s => s.subtitle).join('');
-      let ttsAudioUrl: string | null = null;
-      if (ttsScript) {
-        setTtsLoading(true);
-        try {
-          const ttsRes = await api.post<{ audioUrl: string; totalDuration: number; shotDurations: number[]; totalVideoDuration: number; wordBoundaries?: Array<{text: string; offset: number; duration: number}> }>('/voiceover/tts', {
-            script: ttsScript, voice, shots: result.shots.map(s => ({ subtitle: s.subtitle })),
-          });
-          setAudioUrl(ttsRes.audioUrl);
-          setAudioDuration(ttsRes.totalDuration);
-          if (ttsRes.wordBoundaries) setWordBoundaries(ttsRes.wordBoundaries);
-          ttsAudioUrl = ttsRes.audioUrl;
-          const updatedShots = result.shots.map((s, i) => ({ ...s, duration: ttsRes.shotDurations[i] ?? s.duration }));
-          setShots(updatedShots);
-          result.shots = updatedShots;
-          result.totalVideoDuration = ttsRes.totalVideoDuration;
-        } catch (e) {
-          console.warn('TTS failed, using estimated durations:', e);
-        } finally { setTtsLoading(false); }
-      }
-
-      // ─── Save to project/video/shots DB ─────────────────────────────
-      let vid = videoId;
-      const autoName = (script.trim() || subtitleInput.trim()).slice(0, 30) || '未命名视频';
-
-      // Create project if needed
-      if (!projectId) {
-        const proj = await api.post<{ id: string }>('/projects', { name: autoName });
-        setProjectId(proj.id);
-        // Create video
-        const video = await api.post<{ id: string }>(`/projects/${proj.id}/videos`, { name: autoName, script: script.trim(), subtitle_input: subtitleInput.trim(), style, ratio, voice, seed: batchSeedRef.current, params: { model, resolution, generateAudio, watermark, seed: batchSeedRef.current, serviceTier, priority, returnLastFrame, draft, webSearch } });
-        vid = video.id;
-        setVideoId(vid);
-        setVideoName(autoName);
-        window.history.replaceState(null, '', `/voiceover-v3?projectId=${proj.id}&videoId=${vid}`);
-      } else if (!vid) {
-        // Create video in existing project
-        const video = await api.post<{ id: string }>(`/projects/${projectId}/videos`, { name: autoName, script: script.trim(), subtitle_input: subtitleInput.trim(), style, ratio, voice, seed: batchSeedRef.current, params: { model, resolution, generateAudio, watermark, seed: batchSeedRef.current, serviceTier, priority, returnLastFrame, draft, webSearch } });
-        vid = video.id;
-        setVideoId(vid);
-        setVideoName(autoName);
-        window.history.replaceState(null, '', `/voiceover-v3?projectId=${projectId}&videoId=${vid}`);
-      } else {
-        // Update existing video
-        await api.put(`/videos/${vid}`, { script: script.trim(), subtitle_input: subtitleInput.trim(), style, ratio, voice, seed: batchSeedRef.current, audio_url: ttsAudioUrl, params: { model, resolution, generateAudio, watermark, seed: batchSeedRef.current, serviceTier, priority, returnLastFrame, draft, webSearch } });
-      }
-
-      // Save shots to DB — delete existing first, then insert new
-      if (vid) {
-        await api.del(`/videos/${vid}/shots`).catch(() => {});
-        const allSubjects = videoSubjects.map(vs => ({ label: vs.label, image_url: vs.image_url || '' }));
-        const createdShots = await api.post<any[]>(`/videos/${vid}/shots`, { shots: result.shots.map(s => ({ title: s.title, description: s.description, prompt: s.prompt, subtitle: s.subtitle, duration: s.duration, ratio: s.ratio || ratio, mood: s.mood, camera_movement: s.camera_movement, subjects: allSubjects })) });
-        if (createdShots) {
-          const withIds = result.shots.map((s, i) => ({ ...s, id: createdShots[i]?.id }));
-          setShots(withIds);
-        }
-        // Save audio_url to video
-        if (ttsAudioUrl) {
-          await api.put(`/videos/${vid}`, { audio_url: ttsAudioUrl }).catch(() => {});
-        }
-      }
+      await pollStoryboardJob(jobId);
     } catch (err) {
       setInitError(err instanceof Error ? err.message : '生成失败，请重试');
-    } finally { setIniting(false); }
+      setIniting(false);
+    }
+  }
+
+  // ── 分镜生成任务 ──────────────────────────────────────────────────────
+  // 一次分镜要 30-80 秒。同步请求的话，切走页面 / 手机锁屏 / Next 代理超时都会让它白跑。
+  // 改成后端任务：提交拿 jobId，本地记一笔，轮询取结果 —— 回到页面能接着取。
+  const SB_JOB_KEY = 'voiceover-v3:sb-job';
+  const sbPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  async function startStoryboardJob(payload: Record<string, unknown>) {
+    const { jobId } = await api.post<{ jobId: string }>('/prompt/storyboard-async', payload);
+    try {
+      localStorage.setItem(SB_JOB_KEY, JSON.stringify({ jobId, videoId: videoId || null, at: Date.now() }));
+    } catch {}
+    return jobId;
+  }
+
+  function clearStoryboardJob() {
+    try { localStorage.removeItem(SB_JOB_KEY); } catch {}
+    if (sbPollRef.current) { clearInterval(sbPollRef.current); sbPollRef.current = null; }
+  }
+
+  // 轮询到结束为止。resumed=true 表示是回到页面接着取的，文案不一样。
+  function pollStoryboardJob(jobId: string, resumed = false) {
+    setIniting(true);
+    if (resumed) setInitError('');
+    if (sbPollRef.current) clearInterval(sbPollRef.current);
+    return new Promise<void>(resolve => {
+      const tick = async () => {
+        try {
+          const d = await api.get<{ status: string; result?: Storyboard; error?: string; elapsed?: number }>(
+            `/prompt/storyboard-status/${jobId}`);
+          if (d.status === 'processing') { setInitElapsed(d.elapsed ?? 0); return; }
+          clearStoryboardJob();
+          if (d.status === 'done' && d.result) {
+            try { await finishStoryboard(d.result); }
+            catch (e) { setInitError(e instanceof Error ? e.message : '分镜处理失败'); }
+          } else {
+            setInitError(d.error || (d.status === 'expired' ? '任务已过期' : '分镜生成失败'));
+          }
+          setIniting(false); resolve();
+        } catch (e) {
+          // 轮询本身失败（断网之类）不终止任务 —— 任务在后端照跑，下一次 tick 再试
+          console.warn('storyboard poll failed:', e);
+        }
+      };
+      tick();
+      sbPollRef.current = setInterval(tick, 3000);
+    });
+  }
+
+  // 回到页面：本地还记着一个任务就接着轮询（videoId 要对得上，别把 A 视频的结果写进 B）
+  useEffect(() => {
+    if (!dataLoaded) return;
+    let raw: string | null = null;
+    try { raw = localStorage.getItem(SB_JOB_KEY); } catch {}
+    if (!raw) return;
+    try {
+      const saved = JSON.parse(raw) as { jobId: string; videoId: string | null };
+      if ((saved.videoId || null) !== (videoId || null)) return;
+      if (saved.jobId) pollStoryboardJob(saved.jobId, true);
+    } catch { clearStoryboardJob(); }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dataLoaded]);
+
+  useEffect(() => () => { if (sbPollRef.current) clearInterval(sbPollRef.current); }, []);
+
+  // 拿到分镜结果之后的全部后处理：转成 shots、（解说纪录片）配音、落库。
+  // 抽出来是因为异步任务的结果可能是**回到页面时**才取到的，那时 handleInit 早就退出了。
+  async function finishStoryboard(sbResult: Storyboard) {
+    const drafts = toShotDrafts(sbResult, videoType);
+    if (drafts.length === 0) throw new Error('模型没有返回任何分镜');
+
+    const result: InitResult = {
+      autoShotCount: drafts.length,
+      shotCount:     drafts.length,
+      shots: drafts.map((d, i) => {
+        // @图片N 是 1-based，对应 subjectContext 里带图角色的顺序；
+        // 超出角色数量的编号指向参考素材，不是角色，跳过。
+        const labels = d.imageRefs
+          .map(n => subjectContext.subjectsWithImage[n - 1])
+          .filter(Boolean)
+          .map(sub => scriptAnalysis.find(a => a.linkedSubjectId === sub.id)?.label || sub.label);
+        return {
+          shot_number: i + 1,
+          title:       d.title || `分镜 ${i + 1}`,
+          subtitle:    d.subtitle,
+          description: d.description,
+          prompt:      d.prompt,
+          duration:    d.duration,
+          ratio,
+          shot_size:       normalizeShotSize(d.shot_type),
+          camera_movement: normalizeCameraMove(d.camera_movement),
+          mood:            d.lighting,
+          roll_type:       d.rollType,
+          voice_style:     d.voiceStyle || undefined,
+          subjects:        labels,
+          shot_subjects:   labels.map((label, k) => ({ label, color: ['#3b82f6','#ef4444','#10b981','#f59e0b'][k % 4] })),
+        };
+      }),
+      totalVideoDuration: drafts.reduce((a, d) => a + d.duration, 0),
+    };
+    setInitResult(result);
+    setShots(result.shots);
+    if (!subtitleInput.trim() && result.shots.length > 0) {
+      setSubtitleInput(result.shots.map(s => s.subtitle).join(''));
+    }
+    batchSeedRef.current = seed ?? Math.floor(Math.random() * 2147483647);
+
+    // TTS: 生成语音并按实际时长更新各分镜 duration。
+    // 只有解说纪录片走这条 —— 叙事短片的人声是 Seedance 按 prompt 里的对白生成的，
+    // 再叠一条 Azure 旁白会把角色说话盖掉，分镜时长也照模型给的走。
+    const ttsScript = videoType === 'narration'
+      ? (subtitleInput.trim() || result.shots.map(s => s.subtitle).join(''))
+      : '';
+    let ttsAudioUrl: string | null = null;
+    if (ttsScript) {
+      setTtsLoading(true);
+      try {
+        const ttsRes = await api.post<{ audioUrl: string; totalDuration: number; shotDurations: number[]; totalVideoDuration: number; wordBoundaries?: Array<{text: string; offset: number; duration: number}> }>('/voiceover/tts', {
+          script: ttsScript, voice, shots: result.shots.map(s => ({ subtitle: s.subtitle, duration: s.duration, voice_style: s.voice_style })),
+        });
+        setAudioUrl(ttsRes.audioUrl);
+        setAudioDuration(ttsRes.totalDuration);
+        if (ttsRes.wordBoundaries) setWordBoundaries(ttsRes.wordBoundaries);
+        ttsAudioUrl = ttsRes.audioUrl;
+        const updatedShots = result.shots.map((s, i) => ({ ...s, duration: ttsRes.shotDurations[i] ?? s.duration }));
+        setShots(updatedShots);
+        result.shots = updatedShots;
+        result.totalVideoDuration = ttsRes.totalVideoDuration;
+      } catch (e) {
+        console.warn('TTS failed, using estimated durations:', e);
+      } finally { setTtsLoading(false); }
+    }
+
+    // ─── Save to project/video/shots DB ─────────────────────────────
+    let vid = videoId;
+    const autoName = (script.trim() || subtitleInput.trim()).slice(0, 30) || '未命名视频';
+
+    // Create project if needed
+    if (!projectId) {
+      const proj = await api.post<{ id: string }>('/projects', { name: autoName });
+      setProjectId(proj.id);
+      // Create video
+      const video = await api.post<{ id: string }>(`/projects/${proj.id}/videos`, { name: autoName, script: script.trim(), subtitle_input: subtitleInput.trim(), style, ratio, voice, seed: batchSeedRef.current, params: { model, resolution, generateAudio, watermark, seed: batchSeedRef.current, serviceTier, priority, returnLastFrame, draft, webSearch, videoType } });
+      vid = video.id;
+      setVideoId(vid);
+      setVideoName(autoName);
+      window.history.replaceState(null, '', `/voiceover-v3?projectId=${proj.id}&videoId=${vid}`);
+    } else if (!vid) {
+      // Create video in existing project
+      const video = await api.post<{ id: string }>(`/projects/${projectId}/videos`, { name: autoName, script: script.trim(), subtitle_input: subtitleInput.trim(), style, ratio, voice, seed: batchSeedRef.current, params: { model, resolution, generateAudio, watermark, seed: batchSeedRef.current, serviceTier, priority, returnLastFrame, draft, webSearch, videoType } });
+      vid = video.id;
+      setVideoId(vid);
+      setVideoName(autoName);
+      window.history.replaceState(null, '', `/voiceover-v3?projectId=${projectId}&videoId=${vid}`);
+    } else {
+      // Update existing video
+      await api.put(`/videos/${vid}`, { script: script.trim(), subtitle_input: subtitleInput.trim(), style, ratio, voice, seed: batchSeedRef.current, audio_url: ttsAudioUrl, params: { model, resolution, generateAudio, watermark, seed: batchSeedRef.current, serviceTier, priority, returnLastFrame, draft, webSearch, videoType } });
+    }
+
+    // Save shots to DB — delete existing first, then insert new
+    if (vid) {
+      await api.del(`/videos/${vid}/shots`).catch(() => {});
+      const allSubjects = videoSubjects.map(vs => ({ label: vs.label, image_url: vs.image_url || '' }));
+      const createdShots = await api.post<any[]>(`/videos/${vid}/shots`, { shots: result.shots.map(s => ({ title: s.title, description: s.description, prompt: s.prompt, subtitle: s.subtitle, duration: s.duration, ratio: s.ratio || ratio, mood: s.mood, camera_movement: s.camera_movement, shot_type: s.shot_size, roll_type: s.roll_type, voice_style: s.voice_style, subjects: allSubjects })) });
+      if (createdShots) {
+        const withIds = result.shots.map((s, i) => ({ ...s, id: createdShots[i]?.id }));
+        setShots(withIds);
+      }
+      // Save audio_url to video
+      if (ttsAudioUrl) {
+        await api.put(`/videos/${vid}`, { audio_url: ttsAudioUrl }).catch(() => {});
+      }
+    }
   }
 
   async function handleRegenTTS() {
     const ttsScript = subtitleInput.trim();
     if (!ttsScript) return;
+    setTtsNotice('');
     setTtsLoading(true);
     try {
-      const ttsRes = await api.post<{ audioUrl: string; totalDuration: number; shotDurations: number[]; totalVideoDuration: number; wordBoundaries?: Array<{text: string; offset: number; duration: number}> }>('/voiceover/tts', {
-        script: ttsScript, voice, shots: shots.length > 0 ? shots.map(s => ({ subtitle: s.subtitle })) : [{ subtitle: ttsScript }],
+      // 已经生成过分镜视频就锁时长：让语音去贴合现成的画面（Azure 在 ±18% 内调语速），
+      // 而不是按新音色重算画面时长 —— 后者会逼着把分镜视频重做一遍。
+      const hasGenerated = shots.some((_, i) => tasks[i]?.status === 'succeeded');
+      const ttsRes = await api.post<{ audioUrl: string; totalDuration: number; shotDurations: number[]; totalVideoDuration: number; wordBoundaries?: Array<{text: string; offset: number; duration: number}>; overflowShots?: number[] }>('/voiceover/tts', {
+        script: ttsScript, voice, lockDurations: hasGenerated,
+        shots: shots.length > 0 ? shots.map(s => ({ subtitle: s.subtitle, duration: s.duration, voice_style: s.voice_style })) : [{ subtitle: ttsScript }],
       });
       setAudioUrl(ttsRes.audioUrl);
       setAudioDuration(ttsRes.totalDuration);
       if (ttsRes.wordBoundaries) setWordBoundaries(ttsRes.wordBoundaries);
+      // 换音色后每镜的整数秒会跟着重算（不同音色语速不同），必须写回 shots ——
+      // 否则合并时按旧时长把画面贴齐，而音轨是按新时长拼的，两者会一路错开。
+      if (Array.isArray(ttsRes.shotDurations) && shots.length > 0) {
+        const updated = shots.map((sh, i) => ({ ...sh, duration: ttsRes.shotDurations[i] ?? sh.duration }));
+        setShots(updated);
+        updated.forEach((sh, i) => {
+          if (sh.id && sh.duration !== shots[i].duration) {
+            api.put(`/shots/${sh.id}`, { duration: sh.duration }).catch(() => {});
+          }
+        });
+        // 锁时长模式下画面秒数不变，只有旁白实在塞不进去的镜头才会被顶长（overflowShots）；
+        // 没锁时长（还没生成视频）则按新时长走，不需要提示重做。
+        const overflow = ttsRes.overflowShots || [];
+        setTtsNotice(
+          !hasGenerated
+            ? ''
+            : overflow.length > 0
+              ? `第 ${overflow.join('、')} 镜的旁白装不进现有画面（已放宽语速到 ±18%），`
+                + `建议改短这几镜的旁白，或只重新生成这几镜；其余分镜直接「分镜合并」即可`
+              : '已按现有画面时长重配语音，直接「分镜合并」重新烧录即可，不用重新生成分镜视频'
+        );
+      }
       if (videoId) {
         try { await api.put(`/videos/${videoId}`, { audio_url: ttsRes.audioUrl, subtitle_input: ttsScript }); } catch {}
       }
     } catch (e) {
       console.warn('TTS regen failed:', e);
+      setTtsNotice('配音生成失败，请重试');
     } finally { setTtsLoading(false); }
   }
 
@@ -1788,6 +1978,11 @@ export default function VoiceoverPage() {
       mediaImages.forEach((m, i) => {
         descLines.push(`图片${withImg.length + i + 1}：参考素材「${m.name || '素材'}」— ${m.description || ''}`);
       });
+      // 视频/音频也按类型各自编号 —— prompt 里可以用 @视频N / @音频N 指代
+      mediaItems.filter(m => m.url && !m.uploading && m.mediaType === 'video')
+        .forEach((m, i) => descLines.push(`视频${i + 1}：参考视频「${m.name || '素材'}」— ${m.description || ''}`));
+      mediaItems.filter(m => m.url && !m.uploading && m.mediaType === 'audio')
+        .forEach((m, i) => descLines.push(`音频${i + 1}：参考音频「${m.name || '素材'}」— ${m.description || ''}`));
       const imageDescriptions = descLines.length > 0 ? descLines.join('\n') : undefined;
 
       const res = await api.post<{ taskId: string; status: string }>('/video/generate', {
@@ -1850,14 +2045,22 @@ export default function VoiceoverPage() {
   }
 
   async function handleMerge() {
-    if (!audioUrl) { setMergeError('请先生成语音（TTS）'); return; }
+    // 叙事短片不传 audioUrl —— 后端保留各分镜视频自带的对白音轨，只烧字幕。
+    // 解说纪录片仍然用 Azure TTS 整轨覆盖。
+    const useShotAudio = videoType !== 'narration';
+    if (!useShotAudio && !audioUrl) { setMergeError('请先生成语音（TTS）'); return; }
     const succeededShots = shots.map((shot, i) => ({ shot, task: tasks[i] })).filter(({ task }) => task?.status === 'succeeded' && (task.localUrl || task.videoUrl));
     if (succeededShots.length < 1) return;
-    const videoList = succeededShots.map(({ shot, task }) => ({ url: (task!.localUrl || task!.videoUrl) as string, subtitle: shot.subtitle || '', duration: task!.duration || shot.duration || 5 }));
-    const fullSubtitle = subtitleInput.trim() || shots.map(s => s.subtitle).join('');
+    // targetDuration 是按语音排好的秒数，duration 是实际生成出来的 —— 后端按前者把画面贴齐
+    const videoList = succeededShots.map(({ shot, task }) => ({ url: (task!.localUrl || task!.videoUrl) as string, subtitle: shot.subtitle || '', duration: task!.duration || shot.duration || 5, targetDuration: shot.duration || undefined }));
+    // 烧进画面的字幕必须和念出来的字一模一样。TTS 现在是**逐镜按 shot.subtitle 合成**的
+    // （分支条件见 /voiceover/tts），所以字幕也以各镜台词为准 —— 输入框里的原文可能已经
+    // 被模型改写成 narration_script，拿它排字幕会和人声对不上。
+    const anyShotSub = shots.some(s => (s.subtitle || '').trim());
+    const fullSubtitle = anyShotSub ? shots.map(s => s.subtitle || '').join('') : subtitleInput.trim();
     setMerging(true); setMergeError(''); setMergedVideoUrl(null);
     try {
-      const res = await api.post<{ mergeId: string }>('/voiceover/merge-async', { videos: videoList, audioUrl, voice, subtitle: fullSubtitle, subtitleStyle, banner, bannerStyle, wordBoundaries });
+      const res = await api.post<{ mergeId: string }>('/voiceover/merge-async', { videos: videoList, audioUrl: useShotAudio ? undefined : audioUrl, voice, subtitle: fullSubtitle, subtitleStyle, banner, bannerStyle, wordBoundaries });
       setMergeId(res.mergeId);
       pollMergeStatus(res.mergeId);
     } catch (err) {
@@ -1884,7 +2087,8 @@ export default function VoiceoverPage() {
   const mediaDescMissing = mediaItems.some(m => !m.uploading && m.url && !m.description?.trim());
   const succeededCount  = Object.values(tasks).filter(t => t.status === 'succeeded').length;
   const allDone         = shots.length > 0 && shots.every((_, i) => { const t = tasks[i]; return t && TERMINAL.has(t.status); });
-  const canMerge        = !!audioUrl && succeededCount >= 1;
+  // 叙事短片没有 TTS 音轨也能合（用视频自带对白）
+  const canMerge        = (videoType !== 'narration' || !!audioUrl) && succeededCount >= 1;
   const estText         = subtitleInput.trim() || script;
   const estDuration     = estimateScriptDuration(estText);
   const estShotCount    = recommendShotCount(estDuration);
@@ -2095,6 +2299,11 @@ export default function VoiceoverPage() {
                       <audio controls src={audioUrl} style={{ height: 28, flex: 1, minWidth: 120 }} />
                     )}
                   </div>
+                  {ttsNotice && (
+                    <p style={{ margin: '6px 0 0', fontSize: 11, lineHeight: 1.5, color: ttsNotice.includes('需要重新生成') ? '#b45309' : '#6b7280' }}>
+                      {ttsNotice}
+                    </p>
+                  )}
                 </div>
                 </>)}
 
@@ -2252,16 +2461,21 @@ export default function VoiceoverPage() {
 
                   {initError && <div className={styles.errorBox}>{initError}</div>}
 
-                  <div style={{ display: 'flex', justifyContent: 'center', marginTop: 18 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, marginTop: 18 }}>
                   <button type="button" onClick={handleInit} disabled={initing || (!script.trim() && !subtitleInput.trim()) || anyUploading || mediaDescMissing}
                     className={styles.btnPrimary} style={{ padding: '7px 24px', width: 'auto' }}>
                     {initing ? (
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
                         <span className={styles.spinner} style={{ borderColor: '#5eead4', borderTopColor: '#fff' }} />
-                        分镜进行中...
+                        分镜进行中{initElapsed > 0 ? ` ${initElapsed}s` : ''}...
                       </span>
                     ) : anyUploading ? '素材上传中，请等待…' : mediaDescMissing ? '请填写素材说明' : initResult ? '重新生成分镜脚本' : '生成分镜脚本'}
                   </button>
+                  {initing && (
+                    <p style={{ margin: 0, fontSize: 11, color: '#6b7280' }}>
+                      任务在服务器上跑，通常 40-80 秒。可以离开这个页面，回来会自动接着取结果
+                    </p>
+                  )}
                   </div>
               </div>
 
@@ -2313,6 +2527,14 @@ export default function VoiceoverPage() {
                                       color: shot.roll_type === 'a_roll' ? '#9a3412' : '#0f766e',
                                       background: shot.roll_type === 'a_roll' ? '#ffedd5' : '#ccfbf1' }}>
                                     {shot.roll_type === 'a_roll' ? 'A-roll' : 'B-roll'}
+                                  </span>
+                                )}
+                                {shot.voice_style && VOICE_STYLE_TAGS[shot.voice_style] && (
+                                  <span title="这一镜旁白的情绪，配音时转成 Azure 的表达风格"
+                                    style={{ fontSize: 10, borderRadius: 3, padding: '1px 4px',
+                                      color: VOICE_STYLE_TAGS[shot.voice_style].fg,
+                                      background: VOICE_STYLE_TAGS[shot.voice_style].bg }}>
+                                    {VOICE_STYLE_TAGS[shot.voice_style].label}
                                   </span>
                                 )}
                                 {shot.mood && <span style={{ fontSize: 10, color: '#92400e', background: '#fef3c7', borderRadius: 3, padding: '1px 4px' }}>{shot.mood}</span>}
@@ -2368,6 +2590,9 @@ export default function VoiceoverPage() {
                                   className={styles.select} style={{ width: '100%', marginTop: 2 }}>
                                   <option value="">--</option>
                                   {SHOT_SIZES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                                  {/* 归一化没认出来的值也得能显示，否则 select 是空白，看着像丢了数据 */}
+                                  {shot.shot_size && !SHOT_SIZES.some(o => o.value === shot.shot_size) &&
+                                    <option value={shot.shot_size}>{shot.shot_size}</option>}
                                 </select>
                               </div>
                               <div>
@@ -2381,6 +2606,8 @@ export default function VoiceoverPage() {
                                   className={styles.select} style={{ width: '100%', marginTop: 2 }}>
                                   <option value="">--</option>
                                   {CAMERA_MOVEMENTS.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+                                  {shot.camera_movement && !CAMERA_MOVEMENTS.some(o => o.value === shot.camera_movement) &&
+                                    <option value={shot.camera_movement}>{shot.camera_movement}</option>}
                                 </select>
                               </div>
                               <div>
@@ -2527,7 +2754,7 @@ export default function VoiceoverPage() {
                         {succeededCount >= 1 && (
                           <>
                             <p className={styles.mergeTitle}>{succeededCount} / {shots.length} 个分镜视频已生成{allDone ? ' — 全部完成！' : ''}</p>
-                            <p className={styles.mergeSub}>合并后自动烧录字幕 + 叠加配音</p>
+                            <p className={styles.mergeSub}>{videoType === 'narration' ? '合并后自动烧录字幕 + 叠加配音' : '合并后自动烧录字幕，保留分镜视频自带的对白音轨'}</p>
                           </>
                         )}
                         <div className={styles.mergeFooter} style={{ marginTop: 14, justifyContent: 'center' }}>
@@ -2535,7 +2762,7 @@ export default function VoiceoverPage() {
                             {succeededCount >= 1 && (
                               <button type="button" onClick={handleMerge} disabled={merging || !canMerge}
                                 className={styles.btnSmGreen} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '7px 32px', fontSize: 15, fontWeight: 600, borderRadius: 10 }}>
-                                {merging ? <><span className={styles.spinner} style={{ borderColor: '#bbf7d0', borderTopColor: '#16a34a' }} />合并中…</> : mergedVideoUrl ? '重新生成(分镜视频+字幕+配音)' : '分镜合并(分镜视频+字幕+配音)'}
+                                {merging ? <><span className={styles.spinner} style={{ borderColor: '#bbf7d0', borderTopColor: '#16a34a' }} />合并中…</> : `${mergedVideoUrl ? '重新生成' : '分镜合并'}(分镜视频+字幕+${videoType === 'narration' ? '配音' : '对白原声'})`}
                               </button>
                             )}
                           </div>
