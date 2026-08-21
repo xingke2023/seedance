@@ -27,14 +27,16 @@ function getClient(apiKey) {
 async function callClaude({ system, user, maxTokens = 4096, effort = 'medium', apiKey }) {
   const client = getClient(apiKey)
   try {
-    const res = await client.messages.create({
+    // 走流式：非流式请求在 max_tokens 大到「可能跑超 10 分钟」时会被 SDK 直接拒掉
+    // （分镜类调用给到 24000 就会触发）。这里只等最终整条消息，调用方拿到的还是完整文本。
+    const res = await client.messages.stream({
       model: MODEL,
       max_tokens: maxTokens,
       system,
       thinking: { type: 'adaptive' },
       output_config: { effort },
       messages: [{ role: 'user', content: user }],
-    })
+    }).finalMessage()
 
     if (res.stop_reason === 'refusal') {
       throw new Error('模型拒绝了该请求，请调整输入内容')

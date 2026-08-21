@@ -100,6 +100,7 @@ async function initDB() {
   await query(`ALTER TABLE shots ADD COLUMN IF NOT EXISTS shot_type VARCHAR(30)`).catch(() => {})
   await query(`ALTER TABLE shots ADD COLUMN IF NOT EXISTS lighting VARCHAR(30)`).catch(() => {})
   await query(`ALTER TABLE shots ADD COLUMN IF NOT EXISTS roll_type VARCHAR(10)`).catch(() => {})
+  await query(`ALTER TABLE shots ADD COLUMN IF NOT EXISTS voice_style VARCHAR(20)`).catch(() => {})
 
   await query(`
     CREATE TABLE IF NOT EXISTS video_media (

@@ -37,7 +37,8 @@ const SINGLE_SHOT_SYSTEM = `你是专业的 Seedance 视频提示词专家，精
 1. 英文，具体不抽象
 2. 镜头/构图描述放最前
 3. 50-150词
-4. 避免 no/without 否定
+4. 否定只用在镜头行为和风格上（no cuts / no zoom / no stabilization / no 3D, no cartoon）——
+   Seedance 吃这一套；画面内容不要用否定（要空街写 empty street，不要写 no people、无水印）
 5. 避免矛盾指令
 
 ## 输出格式
@@ -210,7 +211,9 @@ const NARRATION_SYSTEM = `你是专业的港险科普/叙事短视频导演，�
 ## 视频风格：旁白解说 + B-roll画面（非短剧）
 - 全程旁白配音，观众听声音、看画面，无演员扮演对话
 - 画面是旁白的"视觉注解"——抽象概念用具体画面表达
-- 每个镜头预留下三分之一空间给字幕（避免重要视觉元素出现在画面底部）
+- 每个镜头的下三分之一保持干净（避免重要视觉元素出现在画面底部）。
+  **画面里不要出现任何文字** —— 字幕是后期烧进去的，模型再渲一层就会重叠；
+  prompt_en 里也不要用 subtitle / caption 解释留位原因，提到它模型就会真去渲一行字
 - 适合抖音/视频号/微信，横屏16:9
 
 ## 旁白完整性要求（核心原则）
@@ -257,12 +260,11 @@ const NARRATION_SYSTEM = `你是专业的港险科普/叙事短视频导演，�
   "duration": "8s",
   "shot_type": "wide shot",
   "camera_move": "slow push in",
-  "composition": "rule of thirds, lower third clear for subtitles",
+  "composition": "rule of thirds, lower third kept clean and unobstructed",
   "lighting": "...",
   "color_tone": "...",
   "description_zh": "画面内容说明，并注明情绪基调（如：阴云下的城市，传递不安感）",
   "narration_script": "此镜头的完整旁白（最终成品，可直接配音）。字数要与镜头时长匹配（8s≈28-32字，10s≈35-40字，12s≈42-50字，15s≈52-65字）。语言有温度、有节奏感，能带动情绪。避免照本宣科，要像讲故事而非念说明书。",
-  "subtitle_text": "屏幕叠加的关键词/核心数据（简短有力，可空）",
   "prompt_en": "完整英文提示词50-100词",
   "first_frame": "首帧画面描述",
   "last_frame": "末帧画面描述"
@@ -295,46 +297,69 @@ const NARRATION_SYSTEM = `你是专业的港险科普/叙事短视频导演，�
 重要：字符串值内禁止使用英文双引号 "，需引用时请改用 「」或（）。`
 
 // ─── 以下不是移植内容 ───────────────────────────────────────────────────────
+// 拍摄手艺来自参考项目 OpenMontage（/home/ubuntu/OpenMontage）：
+//   skills/creative/prompting/seedance-prompting.md  Seedance 2.0 结构、口型句式、多镜头身份锚定
+//   skills/creative/video-gen-prompting.md           五段骨架、运镜原语（dolly≠zoom、static 是严格的）
+//   skills/creative/storytelling.md                  反主观规则、主体进出画四原语
+//   skills/creative/cinematic.md                     镜头时长呼吸、情绪词换成视觉成因
+//   docs/narration-broll-pairing.md                  声画 2:6:2、堪景写法、语速与留白
+// 分工：逐字移植的系统提示词管**叙事框架和 JSON 结构**，这些追加段管**怎么把一个镜头
+// 写成提示词**，拼在 user message 末尾。
+
 // 叙事短片的台词。STORYBOARD / QCZH 只产画面，没有台词字段，而 /voiceover/init
 // 原本会逐镜生成字幕 —— 换引擎后这块得补回来，所以第二步单独写台词。
-const DIALOGUE_SYSTEM = `你是影视编剧，为已完成的分镜脚本逐镜撰写中文台词/旁白。
+// 台词以**人物对白**为主：叙事短片开着 generate_audio，对白会被写进 prompt_en
+// 由 Seedance 直接生成人声和口型，所以必须知道每句话是谁说的（speaker），
+// 而且要能区分「角色开口说」和「画外旁白」—— 只有前者能进 prompt。
+// speaker_en 是给 prompt_en 用的英文指代，中文 speaker 留给界面和字幕。
+const DIALOGUE_SYSTEM = `你是影视编剧，为已完成的分镜脚本逐镜撰写中文台词。
 
-## 写作要求
-1. **每个镜头都必须有台词，不能留空** —— 后续要按台词长度分配配音时长
-2. 字数与镜头时长匹配：约每秒 3.5 个字（5s≈17字，8s≈28字，10s≈35字，15s≈52字）
-3. 通篇连贯，合起来是一个完整的故事，不是各镜头互不相干的说明
-4. 该用对白的地方写对白，直接写说的话，不要加「某某说：」这类提示语；没有人物说话的镜头写旁白
-5. 口语化，能直接交给配音员朗读；避免书面语和解说腔
-6. 不要复述画面里已经看得见的东西 —— 台词要补充画面给不了的信息或情绪
+## 核心要求：以人物对白为主
+1. **能写对白就不写旁白** —— 画面里有人物的镜头，一律写成角色开口说出来的话；
+   只有确实没有人出镜的纯空镜才允许写旁白
+2. 对白要像真人在说话：口语、短句、有来有回。一个镜头里可以是两个角色对答（最多 3 句）
+3. **先定音色，再写台词**：在 voices 里为每个开口说话的角色写一句英文音色描述
+   （性别、年龄段、口音、语速、音质，例：male, mid-30s, Cantonese-accented Mandarin,
+   low and measured, slightly hoarse）。每个角色只写一句，后端会把这一句**原样**贴进
+   他说话的每一个镜头 —— 换了措辞音色就会漂，所以一次写准。
+   **若 user message 里给了「可用参考音频」**，还要按那里的要求为每个角色补
+   audio_ref 和 voice_zh 两个字段（用参考音频锁音色，比凭空描述稳得多）
+4. **每句都必须写明说话人**，两个字段一起给：
+   - speaker：中文，用画面里看得见的外貌特征指代（如「穿深蓝西装的中年男人」），
+     不要用人名，也不要用「他」「她」这类代词；旁白写「旁白」
+   - speaker_en：同一个人的英文指代（如 the man in the navy suit），
+     用词要和分镜画面里对这个人的描述对得上 —— 它会被拼进英文提示词驱动口型；旁白写 narrator
+5. 字数与镜头时长匹配：约每秒 3.5 个字（5s≈17字，8s≈28字，10s≈35字）。
+   一个镜头里所有台词加起来不能超过该镜头时长
+6. **短镜头的台词要更短**：4 秒以内的镜头，单句不超过 10 个字 —— 台词一长，口型就会漂
+7. 通篇连贯 —— 所有镜头的台词合起来是一个完整故事，不是各镜头互不相干的说明
+8. 直接写说出口的内容，不要加「某某说：」这类提示语；不要复述画面里已经看得见的东西
+9. **语种统一**：一句台词里不要中英混用（专有名词除外）—— 混用会让模型的发音在中途切换
+10. **多音字、生僻字、形近字要换掉**：模型经常读错，改写成发音一致的常用同音字
+   （「螭龙山」→「吃龙山」）。数字、金额、年份写成念得出来的形式（「2024」→「二零二四」）
 
 ## 输出格式
 严格输出 JSON，不要其他内容：
 {
+  "voices": [
+    { "speaker": "穿深蓝西装的中年男人", "voice_en": "male, mid-30s, Cantonese-accented Mandarin, low and measured, slightly hoarse" },
+    { "speaker": "扎马尾的年轻女人", "voice_en": "female, early 30s, warm mid-range Mandarin, gentle and steady, slight breathiness" }
+  ],
   "subtitles": [
-    { "shot_number": 1, "subtitle": "该镜头的台词文本" }
+    {
+      "shot_number": 1,
+      "lines": [
+        { "speaker": "穿深蓝西装的中年男人", "speaker_en": "the man in the navy suit", "type": "dialogue", "text": "这份合同我签不了。" },
+        { "speaker": "扎马尾的年轻女人", "speaker_en": "the young woman with a ponytail", "type": "dialogue", "text": "那你打算怎么跟她交代？" }
+      ]
+    }
   ]
 }
+type 只能取 dialogue（角色在画面里开口说）或 narration（画外旁白）。
 重要：字符串值内禁止使用英文双引号 "，需引用时请改用 「」或（）。`
 
-// B-roll 手法。NARRATION_SYSTEM 里本来就有这套（情绪对应、下三分之一留白），
-// 这里把它抽出来给叙事短片也用 —— 同样是新写的，不是移植内容。
-const BROLL_CRAFT = `
-## 画面手法（B-roll 原则）
-1. **情绪优先于字面**：画面不是台词的字面配图，而是那句话情绪的视觉放大。
-   讲「保费一年两万」不要打字幕写数字，给母亲深夜算账的侧脸；
-   讲「等了十年」不要拍日历，给窗台上换了三轮的植物。
-2. **抽象概念要落到具体画面**：时间、责任、风险、承诺这类词，都必须找到可拍摄的实物或动作来承载。
-3. **给字幕留位**：每镜的下三分之一保持干净，重要视觉元素（人脸、主体动作、关键道具）
-   不要压在画面底部 —— 那里要烧字幕。prompt_en 里用构图词明确这一点。
-4. **镜头类型标注**：为每个镜头判断它是 A-roll 还是 B-roll —— 画面里有人物正对镜头说话
-   （口播、访谈、对白正面镜头）的是 a_roll，其余一律 b_roll。`
-
-// 追加一个输出字段。系统提示词规定的 JSON 结构里没有它，所以要显式要求；
-// 模型漏写时后端会兜底填 b_roll。
-const ROLL_TYPE_FIELD = `
-## 额外输出字段
-在每个镜头对象里额外增加一个字段：
-  "roll_type": "a_roll" 或 "b_roll"
-判定标准见上：画面中有人物正对镜头说话的是 a_roll，其余是 b_roll。`
-
-module.exports = { SINGLE_SHOT_SYSTEM, QCZH_SYSTEM, STORYBOARD_SYSTEM, ENHANCE_SYSTEM, NARRATION_SYSTEM, DIALOGUE_SYSTEM, BROLL_CRAFT, ROLL_TYPE_FIELD }
+// 追加段（拍摄手艺）不在这里 —— 见 ./skills/*.md 和 ./skills/index.js
+module.exports = {
+  SINGLE_SHOT_SYSTEM, QCZH_SYSTEM, STORYBOARD_SYSTEM, ENHANCE_SYSTEM, NARRATION_SYSTEM,
+  DIALOGUE_SYSTEM,
+}
