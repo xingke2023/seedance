@@ -2,6 +2,20 @@
 
 const { query } = require('../db')
 
+// shots 表里这几列是窄 varchar，而它们的值大多来自模型自由生成的英文短语
+// （lighting / shot_type 只有 30 字符）。超长会让整条保存 500，
+// 宁可截断也不要丢掉一整批分镜 —— 这几列只用于界面展示，截断不影响生成。
+const COL_LIMITS = {
+  ratio: 10, mood: 100, camera_movement: 100, camera_movement_type: 20,
+  task_id: 100, task_status: 20, shot_type: 30, lighting: 30,
+  roll_type: 10, voice_style: 20, title: 255,
+}
+const clip = (col, val) => {
+  const max = COL_LIMITS[col]
+  if (!max || typeof val !== 'string') return val
+  return val.length > max ? val.slice(0, max) : val
+}
+
 async function shotRoutes(fastify) {
   fastify.addHook('onRequest', async (request, reply) => {
     if (!request.user) return reply.code(401).send({ success: false, error: '未登录' })
@@ -26,9 +40,9 @@ async function shotRoutes(fastify) {
       for (const shot of shots) {
         num++
         const r = await query(
-          `INSERT INTO shots (video_id, shot_number, title, description, prompt, subtitle, duration, ratio, mood, camera_movement, shot_type, lighting, roll_type, reference_images, subjects)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
-          [videoId, num, shot.title || null, shot.description || null, shot.prompt || null, shot.subtitle || null, shot.duration || 8, shot.ratio || null, shot.mood || null, shot.camera_movement || null, shot.shot_type || null, shot.lighting || null, shot.roll_type || null, JSON.stringify(shot.reference_images || []), JSON.stringify(shot.subjects || [])]
+          `INSERT INTO shots (video_id, shot_number, title, description, prompt, subtitle, duration, ratio, mood, camera_movement, shot_type, lighting, roll_type, voice_style, reference_images, subjects)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
+          [videoId, num, clip('title', shot.title) || null, shot.description || null, shot.prompt || null, shot.subtitle || null, shot.duration || 8, clip('ratio', shot.ratio) || null, clip('mood', shot.mood) || null, clip('camera_movement', shot.camera_movement) || null, clip('shot_type', shot.shot_type) || null, clip('lighting', shot.lighting) || null, clip('roll_type', shot.roll_type) || null, clip('voice_style', shot.voice_style) || null, JSON.stringify(shot.reference_images || []), JSON.stringify(shot.subjects || [])]
         )
         inserted.push(r.rows[0])
       }
@@ -64,7 +78,7 @@ async function shotRoutes(fastify) {
       let idx = 1
 
       const addField = (col, val, isJson) => {
-        if (val !== undefined) { fields.push(`${col}=$${idx++}`); values.push(isJson ? JSON.stringify(val) : val) }
+        if (val !== undefined) { fields.push(`${col}=$${idx++}`); values.push(isJson ? JSON.stringify(val) : clip(col, val)) }
       }
       addField('title', body.title)
       addField('description', body.description)
@@ -76,6 +90,7 @@ async function shotRoutes(fastify) {
       addField('shot_type', body.shot_type)
       addField('lighting', body.lighting)
       addField('roll_type', body.roll_type)
+      addField('voice_style', body.voice_style)
       addField('camera_movement', body.camera_movement)
       addField('camera_position_x', body.camera_position_x)
       addField('camera_position_y', body.camera_position_y)
