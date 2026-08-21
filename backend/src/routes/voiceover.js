@@ -70,36 +70,12 @@ async function downloadWithCache(url) {
 const DEFAULT_API_URL   = 'https://api.deepseek.com'
 const DEFAULT_MODEL     = 'deepseek-chat'
 
-function estimateDuration(text) {
-  const chars = (text || '').replace(/\s/g, '').length
-  return Math.min(15, Math.max(4, Math.ceil(chars / 3.5)))
-}
-
-const SEEDANCE_QUALITY = '电影质感、4K 超高清、细节丰富、色彩自然、画面稳定、无抖动、无模糊无重影'
-const CHAR_CONSISTENCY = '同一角色，服装一致，发型不变，保持人物样貌与服装一致'
-
 function toSRTTime(sec) {
   const h  = Math.floor(sec / 3600)
   const m  = Math.floor((sec % 3600) / 60)
   const s  = Math.floor(sec % 60)
   const ms = Math.round((sec % 1) * 1000)
   return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')},${String(ms).padStart(3,'0')}`
-}
-
-function chunkSubtitle(text, maxChars = 30) {
-  const result = []
-  let remaining = text.trim()
-  while (remaining.length > 0) {
-    if (remaining.length <= maxChars) { result.push(remaining); break }
-    let splitAt = -1
-    for (let i = maxChars; i >= 1; i--) {
-      if (/[。！？…，；、]/.test(remaining[i - 1])) { splitAt = i; break }
-    }
-    if (splitAt === -1) splitAt = Math.ceil(remaining.length / 2)
-    result.push(remaining.slice(0, splitAt).trim())
-    remaining = remaining.slice(splitAt).trim()
-  }
-  return result
 }
 
 function wrapSubtitleLine(text, maxPerLine = 14) {
@@ -288,7 +264,10 @@ function alignSegmentsWithWordBoundaries(segments, wordBoundaries) {
   return result
 }
 
-function buildSRT(videos, videoDurs) {
+// 按分镜时长排字幕时间轴。有 TTS 整轨时字幕跟着音频走（wordBoundaries 对齐），
+// 没有整轨时（叙事短片用分镜视频自带的对白音轨）只能按每镜实际时长切，
+// 镜内再按字数比例分给各个断句。
+function buildShotSRT(videos, videoDurs, maxPerLine) {
   const lines = []
   let idx = 1
   let offset = 0
@@ -296,21 +275,45 @@ function buildSRT(videos, videoDurs) {
     const dur = videoDurs[i] || v.duration || 5
     const text = (v.subtitle || '').trim()
     if (text) {
-      const chunks = chunkSubtitle(text)
-      const totalChars = chunks.reduce((sum, c) => sum + c.length, 0)
-      let chunkOffset = offset
-      chunks.forEach(chunk => {
-        const display = wrapSubtitleLine(chunk.replace(/[。！？…；，、,;.!?：:]+$/, ''))
+      const segments = jiebaSegmentSubtitle(text, maxPerLine)
+      const totalChars = segments.reduce((a, seg) => a + seg.length, 0) || 1
+      let segOffset = offset
+      for (const seg of segments) {
+        const segDur = dur * (seg.length / totalChars)
         lines.push(`${idx++}`)
-        lines.push(`${toSRTTime(chunkOffset)} --> ${toSRTTime(chunkOffset + chunkDur)}`)
-        lines.push(display)
+        lines.push(`${toSRTTime(segOffset)} --> ${toSRTTime(segOffset + segDur)}`)
+        lines.push(wrapSubtitleLine(seg, maxPerLine))
         lines.push('')
-        chunkOffset += chunkDur
-      })
+        segOffset += segDur
+      }
     }
     offset += dur
   })
   return lines.join('\n')
+}
+
+// concat demuxer 要求所有输入的流布局一致 —— 只要有一镜没有音轨（比如那一镜关掉了
+// generate_audio），拼接就会失败。缺的补一条等长静音。
+async function hasAudioStream(filePath) {
+  const r = await execFileAsync('ffprobe', [
+    '-v', 'error', '-select_streams', 'a',
+    '-show_entries', 'stream=index',
+    '-of', 'csv=p=0',
+    filePath,
+  ])
+  return r.stdout.trim().length > 0
+}
+
+async function ensureAudioStream(filePath, outPath) {
+  if (await hasAudioStream(filePath)) return filePath
+  await execFileAsync('ffmpeg', [
+    '-y', '-i', filePath,
+    '-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=stereo',
+    '-map', '0:v:0', '-map', '1:a:0',
+    '-c:v', 'copy', '-c:a', 'aac', '-b:a', '128k', '-shortest',
+    outPath,
+  ], { timeout: 300_000 })
+  return outPath
 }
 
 async function probeDuration(filePath) {
@@ -341,291 +344,6 @@ function escapeXml(str) {
   ))
 }
 
-async function generateVoiceoverShots(script, suggestedCount, style, ratio, mediaInfo = {}) {
-  const apiKey  = process.env.STORYBOARD_API_KEY || ''
-  const baseUrl = (process.env.STORYBOARD_API_URL || DEFAULT_API_URL).replace(/\/$/, '')
-  const model   = process.env.STORYBOARD_MODEL   || DEFAULT_MODEL
-
-  if (!apiKey) throw new Error('请配置 STORYBOARD_API_KEY 环境变量')
-
-  const { imageCount = 0, subjectImageCount = 0, videoCount = 0, audioCount = 0, subjectDefinitions = '', imageDescriptions = '', subtitleMode = 'on', subtitleInput = '' } = mediaInfo
-
-  // subtitleInput provided → distribute exact text; empty → AI auto-generates narration
-  const hasUserSubtitle = !!(subtitleInput && subtitleInput.trim())
-
-
-  const systemMsg = `你是专业电影分镜导演，任务是把视频需求转化为一组有叙事深度的 Seedance 2.0 分镜提示词。
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-【第一步：规划角色与故事弧线（生成任何分镜之前必须先做）】
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-拿到视频需求后，先在脑海中完成：
-
-① 角色设计：出场的人物有哪些？每个人物的外貌特征、性格、在故事中的角色/处境是什么？
-② 故事弧线：这组分镜要讲一个什么故事？
-   - 开幕：什么情境/冲突引入故事？
-   - 发展：主角经历了什么转变/挣扎/行动？
-   - 结尾：如何收尾，留下什么感受？
-③ 场景规划：需要几个不同的地点/时间段/环境？每个场景承担什么叙事功能？
-④ 情节设计：故事中的关键事件/转折点是什么？每个分镜处于哪个叙事阶段？
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-【第二步：每个分镜的四层叙事（缺任何一层为不合格）】
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-【A 前景主体层】人物/主体是谁、正在做什么、动作细节到身体部位
-  - 拆解到身体部位：不写"她在思考"，写"右手食指轻触太阳穴，目光微微上移，嘴唇微张"
-  - 动作有弧度：描述开始→过程变化→结束姿态，不是静止瞬间
-  - 情绪外化为行为：不写"他很焦虑"，写"他将合同翻到最后一页，停顿，食指快速翻回第一页重看一遍"
-【B 背景环境层】场景里同时存在的具体元素（至少2个道具/背景细节）
-  - 具体道具：名字+状态（"凉透的咖啡杯"不是"杯子"；"积满灰的奖杯"不是"奖品"）
-  - 背景行为：其他人物在做什么、屏幕显示什么、窗外发生什么
-  - 空间纵深：前景/中景/背景各有内容
-【C 隐喻信息层】画面中什么细节在暗示更深的意义
-  - 道具隐喻：空置的椅子暗示离开、未接来电暗示压力、半开的门暗示选择
-  - 时间信息：天光颜色/时钟/日历/影子长度暗示时间推移
-  - 对比叙事：主角的状态与背景环境形成对比或呼应
-【D 运动光影层】镜头运动如何配合情绪，光影如何强化叙事
-  - 运镜选一种并说清方向速度：不写"推入"，写"从桌面文件特写缓慢推入至人物侧脸"
-  - 光影说具体：不写"柔光"，写"左侧单一冷白主光，右侧深阴影，人物轮廓与背景分离"
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-【第三步：场景多样性（强制规则，违反为不合格）】
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-1. 严禁连续2个分镜使用同一地点/场景类型
-2. 全片场景必须覆盖至少3种以下类型：
-   A. 人物情绪特写（面部/手部/局部肢体，填满画面）
-   B. 室内叙事场景（有具体道具和背景故事的室内空间）
-   C. 户外/城市/自然（街道/航拍/公园/天空）
-   D. 空镜B-roll（无主角，用环境/道具/群体画面推进叙事）
-   E. 象征/隐喻（时钟/数字/植物/光影/对比构图）
-3. 每4个分镜中至少1个纯空镜/B-roll（无主角入画）
-4. 禁止用"人物坐桌前朝镜头微笑/点头"超过1次
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-【技术规范（全部为必须项，没有可选）】
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-- 主体描述：每段 prompt 开头必须重新描述主体外貌（年龄/性别/发型/服装/体态），不得用"主角""他""她"等代词代替，不使用人名。${imageCount + videoCount > 0 ? '有参考素材时用「<图片 N>中的...」格式锚定。' : ''}
-- 景别节奏：相邻段景别交替变化（全景→中景→特写→空镜→特写...）
-- 运镜多样：避免连续2段同向运镜，之间插固定镜头或反向运镜
-- 光影统一：全片统一光影基调，每段用具体方向/颜色/强度描述
-- 末尾约束：每段 prompt 末尾必须加"无水印，无Logo"
-- prompt 长度：每段 150-220字，禁止用泛化词（"干净背景""整洁办公室""明亮环境"）代替具体场景描写
-${imageCount + videoCount > 0 || subjectDefinitions.trim() ? '- 素材引用：每段都用「<图片 N>中的...」引用参考素材锚定人物外貌，防止 ID 漂移' : imageCount + videoCount === 0 && !subjectDefinitions.trim() ? '- 禁止出现「<图片 N>」「<视频 N>」等素材引用标记（本次无参考素材）' : ''}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-【✅ 合格 prompt 示例（必须达到这个丰富程度）】
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-示例A（叙事转折镜头）：
-"35岁男性，短发略显凌乱，深蓝色西装领带松开，站在办公室落地窗前，窗外是阴天城市天际线，铅灰色云层低压。他左手持一份厚达数十页的合同，右手拇指缓缓摩挲文件边缘，视线从最后一页缓缓抬起移向窗外，眉头微蹙，嘴角轻抿。背景虚化处：会议室长桌上散落着其他合同文件，空置的椅子仍留有坐过的压痕，白板上'Q3目标'数字被划掉重写了两次。左侧冷白主光将人物轮廓从灰暗背景中分离，右脸深阴影。固定镜头缓缓推入，从合同页边特写起，终止于人物疲惫侧脸。电影级4K画面，无水印，无Logo。"
-
-示例B（空镜叙事镜头）：
-"城市金融区俯拍，清晨6:45分，写字楼大堂玻璃门外排队等候的西装人群，每人手持咖啡杯或手机，面朝同一方向，背包和公文包整齐悬挂。地面积水倒映着写字楼玻璃幕墙，反射的人影在水中轻微颤动。门卫刚刷开大堂，人群开始缓缓涌入，第一排的人低头看手机，后排的人踮脚望向门口。早晨冷蓝色天光从左侧照入，玻璃幕墙反射出对面楼宇灯光。摄影机缓慢下降，从俯拍全景降至人群头顶高度。纪录片质感，高清，无水印，无Logo。"
-
-❌ 不合格示例（禁止产出）：
-"男性坐在办公桌前翻看文件，神情专注，背景是干净明亮的办公室，柔光，推入镜头，高清，无水印，无Logo。"（无叙事层次，场景泛化，无具体细节）
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-${hasUserSubtitle ? `【字幕分配规则（严禁修改原文）】
-1. 按视觉场景归组台词——同一地点/情绪的多句台词合入同一分镜，prompt 用四层叙事充分表现
-2. 所有分镜 subtitle 拼接后必须逐字逐句100%等于原文，严禁改写、增删任何字词标点
-3. 单个分镜最多约15秒（≈52字），只有视觉场景需要切换时才拆分，不因字幕稍长就拆
-4. 禁止把单句话拆成多个分镜；只在句子边界（句号/问号/感叹号/省略号）处断开` : `【字幕生成规则】
-1. 根据视频需求自动生成旁白/解说词，填入每个分镜的 subtitle 字段
-2. 字幕语言自然流畅，贴合主题，适合作为画外音；每段约15-50字，不可留空
-3. 全部分镜字幕拼接后构成一段完整连贯的解说/旁白`}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-【输出格式（纯JSON，不含任何其他文字或代码块标记）】
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-{
-  "story_arc": "一句话描述本组分镜的叙事弧线（开篇情境→核心冲突→结尾落点）",
-  "character_anchor": "全片视觉锚点（80-120字）：所有出场角色的外貌描述 + 视觉风格 + 画质词 + 主导光影色调，不写固定地点",
-  "shots": [
-    {
-      "shot_number": 1,
-      "narrative_stage": "开幕/铺垫/发展/转折/高潮/结尾（选一个）",
-      "title": "分镜标题（8字以内）",
-      "subtitle": "${hasUserSubtitle ? '该分镜对应的字幕原文精确子串，严禁修改' : '自动生成的旁白解说词（15-50字）'}",
-      "description": "本格叙事功能（30字以内）：这个镜头推进了什么——处境变化/情绪转折/信息揭示",
-      "prompt": "Seedance 2.0 提示词（150-220字，必须包含四层叙事：A前景主体+B背景环境+C隐喻信息+D运动光影）${imageCount + videoCount > 0 || subjectDefinitions.trim() ? '，用<图片N>引用参考素材' : ''}",
-      "duration": "秒数（整数，ceil(subtitle字数/3.5)，范围4-15）",
-      "ratio": "${ratio}",
-      "camera_movement": "镜头运动（中文，描述方向和速度，如：从文件特写缓慢推入至人物侧脸）",
-      "mood": "情绪基调（中文）",
-      "subjects": []
-    }
-  ]
-}
-
-JSON字段中英文双引号必须转义为\\"，只输出纯JSON对象。`
-
-
-  let mediaHint = ''
-  if (imageCount + videoCount + audioCount > 0) {
-    const parts = []
-    if (subjectImageCount > 0 && imageCount > subjectImageCount) {
-      // Subject images are 图片1..subjectImageCount, uploaded images follow after
-      const uploadedStart = subjectImageCount + 1
-      const uploadedEnd = imageCount
-      parts.push(`角色参考图片为「图片 1」到「图片 ${subjectImageCount}」（已在角色定义中说明），额外参考图片为「图片 ${uploadedStart}」到「图片 ${uploadedEnd}」`)
-    } else if (subjectImageCount > 0) {
-      parts.push(`角色参考图片为「图片 1」到「图片 ${subjectImageCount}」（已在角色定义中说明），无额外参考图片`)
-    } else if (imageCount > 0) {
-      parts.push(`参考图片 ${imageCount} 张（引用方式：「图片 1」到「图片 ${imageCount}」）`)
-    }
-    if (videoCount > 0) parts.push(`参考视频 ${videoCount} 条（引用方式：「视频 1」到「视频 ${videoCount}」）`)
-    if (audioCount > 0) parts.push(`参考音频 ${audioCount} 条（引用方式：「音频 1」到「音频 ${audioCount}」）`)
-    mediaHint = `\n- 用户提供了${parts.join('、')}。严禁引用不存在的图片编号（最大为图片 ${imageCount}）`
-  }
-
-  let subjectHint = ''
-  if (subjectDefinitions.trim()) {
-    subjectHint = `\n\n【已定义的角色（每段prompt必须严格引用）】\n${subjectDefinitions.trim()}\n\n重要规则：\n1. 每段 prompt 中出现角色时，必须写「<图片 N>中的角色名」来锚定角色外貌（N对应上面的编号），防止角色 ID 漂移\n2. 每段 prompt 都必须引用所有角色的图片编号，即使该角色在画面之外也要在 prompt 末尾注明「角色参考：<图片 1>xxx、<图片 2>xxx」\n3. 严禁省略图片引用，严禁使用代词代替角色描述`
-  }
-
-  let imageDescHint = ''
-  if (imageDescriptions.trim()) {
-    imageDescHint = `\n\n【参考图片编号与内容说明（每段prompt必须结合以下描述）】\n${imageDescriptions.trim()}\n\n重要：每段 prompt 中引用图片时，必须结合上述描述来丰富画面内容。例如引用角色图片时需融合其外貌/性格描述，引用参考素材时需体现其用途说明。`
-  }
-
-  let userMsgParts = []
-  if (script && !subtitleInput) {
-    userMsgParts.push(`口播文案：\n${script}`)
-  } else if (script && subtitleInput) {
-    userMsgParts.push(`视频需求：\n${script}`)
-    userMsgParts.push(`视频字幕（必须完整拆分到各分镜的 subtitle 字段，不得遗漏或修改任何文字）：\n${subtitleInput}`)
-  } else if (subtitleInput) {
-    userMsgParts.push(`视频字幕（必须完整拆分到各分镜的 subtitle 字段，不得遗漏或修改任何文字）：\n${subtitleInput}`)
-  }
-
-  const userMsg = `${userMsgParts.join('\n\n')}
-
-要求：
-- 视觉风格：${style || '根据内容自动判断最合适的风格'}
-- 画面比例：${ratio}
-- 建议分镜数量：约 ${suggestedCount} 个（优先按叙事节奏分段，可 ±2 调整）${mediaHint}${hasUserSubtitle ? '\n- 字幕文本必须100%完整覆盖到各分镜的subtitle字段中，每个分镜尽量多承载字幕（单个分镜最多约15秒≈52字），只有叙事场景需要切换时才拆分' : '\n- 每个分镜必须生成字幕（subtitle不可为空），根据视频需求自动生成合适的旁白/解说词'}
-
-按照导演思维完成以下步骤再输出JSON：
-1. 先规划角色：出场人物各自的外貌、身份、处境
-2. 再规划故事弧线：开篇冲突 → 中段发展 → 结尾落点
-3. 设计场景序列：哪些地点/时间/环境承担哪些叙事功能
-4. 为每个分镜写四层叙事（前景主体+背景环境+隐喻信息+运动光影），prompt 150-220字
-5. 输出 story_arc + character_anchor + shots 的JSON${imageCount > 0 || subjectDefinitions.trim() ? '\n6. 每段都要用「<图片 N>中的...」格式引用参考素材，防止人物 ID 漂移' : ''}${subjectHint}${imageDescHint}`
-
-  const res = await fetch(`${baseUrl}/v1/chat/completions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model,
-      messages: [{ role: 'system', content: systemMsg }, { role: 'user', content: userMsg }],
-      temperature: 0.9,
-      max_tokens: 8192,
-      response_format: { type: 'json_object' },
-    }),
-    signal: AbortSignal.timeout(60_000),
-  })
-
-  if (!res.ok) {
-    const errText = await res.text().catch(() => '')
-    throw new Error(`AI API error ${res.status}: ${errText.slice(0, 300)}`)
-  }
-
-  const data    = await res.json()
-  const rawText = (data?.choices?.[0]?.message?.content || '').trim()
-  if (!rawText) throw new Error('API 返回内容为空')
-
-  const cleaned = rawText
-    .replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim()
-
-  let parsed
-  try {
-    parsed = JSON.parse(cleaned)
-  } catch {
-    // Try to extract JSON object from mixed text+JSON response
-    const jsonMatch = rawText.match(/\{[\s\S]*"shots"\s*:\s*\[[\s\S]*\]\s*\}/)
-    if (jsonMatch) {
-      try {
-        parsed = JSON.parse(jsonMatch[0])
-      } catch {
-        try { parsed = JSON.parse(jsonrepair(jsonMatch[0])) } catch {}
-      }
-    }
-    if (!parsed) {
-      try {
-        parsed = JSON.parse(jsonrepair(cleaned))
-      } catch {
-        throw new Error('返回的 JSON 格式无效，请重试。原始：' + rawText.slice(0, 300))
-      }
-    }
-  }
-
-  let rawShots, characterAnchor
-  if (Array.isArray(parsed)) {
-    rawShots = parsed
-    characterAnchor = ''
-  } else if (parsed && Array.isArray(parsed.shots)) {
-    rawShots = parsed.shots
-    characterAnchor = parsed.character_anchor || ''
-  } else {
-    throw new Error('返回格式无效：缺少 shots 数组')
-  }
-
-  // 强制保证：当用户提供了视频字幕时，分镜subtitle拼接必须严格等于原文
-  if (hasUserSubtitle) {
-    // 去掉所有空白后比较，确保内容完全一致
-    const normalize = s => s.replace(/\s+/g, '')
-    const combined = rawShots.map(s => normalize(s.subtitle || '')).join('')
-    const original = normalize(subtitleInput)
-    if (combined !== original) {
-      // AI没有严格遵守，强制用原文按标点边界重新分配
-      // 支持在所有中文标点处断开：句号、逗号、问号、感叹号、分号、冒号、省略号
-      const segments = subtitleInput.match(/[^。！？…，；：\n]+[。！？…，；：\n]?/g) || [subtitleInput]
-      const shotCount = rawShots.length
-      const totalLen = subtitleInput.replace(/\s+/g, '').length
-      const charsPerShot = Math.ceil(totalLen / shotCount)
-      let chunks = []
-      let current = ''
-      for (const seg of segments) {
-        if (current.replace(/\s+/g, '').length + seg.replace(/\s+/g, '').length > charsPerShot && current.trim().length > 0 && chunks.length < shotCount - 1) {
-          chunks.push(current.trim())
-          current = seg
-        } else {
-          current += seg
-        }
-      }
-      if (current.trim()) chunks.push(current.trim())
-      // 块数不足shots数时后面补空
-      while (chunks.length < shotCount) chunks.push('')
-      // 块数超过shots数时合并尾部
-      while (chunks.length > shotCount) {
-        const last = chunks.pop()
-        chunks[chunks.length - 1] += last
-      }
-      // 强制覆盖每个shot的subtitle
-      for (let i = 0; i < rawShots.length; i++) {
-        rawShots[i].subtitle = chunks[i] || ''
-      }
-    }
-  }
-
-  return {
-    characterAnchor,
-    shots: rawShots.map(shot => {
-      let prompt = String(shot.prompt || '').trim()
-      const subtitleLen = (shot.subtitle || '').trim().length
-      const minDuration = Math.max(4, Math.ceil(subtitleLen / 3.5))
-      const duration = typeof shot.duration === 'number' && shot.duration >= minDuration && shot.duration <= 15
-        ? shot.duration
-        : Math.min(15, Math.max(4, minDuration))
-      return {
-        ...shot,
-        prompt,
-        duration,
-      }
-    }),
-  }
-}
-
 async function analyzeSubjects(mediaList) {
   const geminiKey = process.env.GEMINI_API_KEY || ''
   const geminiModel = process.env.GEMINI_MODEL || 'gemini-3-flash-preview'
@@ -637,7 +355,7 @@ async function analyzeSubjects(mediaList) {
 【主体定义规则】
 1. 主体可以是：人物、动物、道具、场景元素等
 2. 每个主体用 2-3 个清晰、稳定的静态特征描述（如服饰、发型、外观、类别），确保唯一可识别性
-3. 定义格式：将<图片N>中的[主体核心特征]定义为<主体N>
+3. 定义格式：将@图片N中的[主体核心特征]定义为<主体N>
 4. 如果一张图片中有多个主体，分别定义每个
 5. 特征描述要具体（不说"一个人"，要说"穿白衬衫、戴眼镜的中年男性"）
 6. 避免使用可能变化的特征（如表情、姿势），优先用服饰、发型、体型等稳定特征
@@ -651,12 +369,12 @@ async function analyzeSubjects(mediaList) {
 示例输出：
 {
   "definitions": [
-    "将<图片 1>中穿红色连衣裙、长卷发的年轻女性定义为<主体1>",
-    "将<图片 1>中穿灰色西装、短发的中年男性定义为<主体2>",
-    "将<图片 2>中白色毛发、蓝眼睛的布偶猫定义为<主体3>"
+    "将@图片1中穿红色连衣裙、长卷发的年轻女性定义为<主体1>",
+    "将@图片1中穿灰色西装、短发的中年男性定义为<主体2>",
+    "将@图片2中白色毛发、蓝眼睛的布偶猫定义为<主体3>"
   ],
   "summary": "共识别3个主体：1位年轻女性、1位中年男性、1只布偶猫",
-  "usage_hint": "在分镜 prompt 中使用 <主体1>@<图片 1> 格式引用，确保每次提及主体时都带上素材绑定关系"
+  "usage_hint": "在分镜 prompt 中使用 <主体1>@图片1 格式引用，确保每次提及主体时都带上素材绑定关系"
 }
 
 只输出纯JSON对象，不包含任何其他文字或代码块标记。`
@@ -891,89 +609,85 @@ ${script}`
     }
   })
 
-  fastify.post('/init', {
-    schema: {
-      body: {
-        type: 'object',
-        properties: {
-          script:    { type: 'string', maxLength: 5000 },
-          style:     { type: 'string', maxLength: 200 },
-          ratio:     { type: 'string' },
-          shotCount: { type: 'integer', minimum: 2, maximum: 20 },
-          imageCount: { type: 'integer', minimum: 0 },
-          subjectImageCount: { type: 'integer', minimum: 0 },
-          videoCount: { type: 'integer', minimum: 0 },
-          audioCount: { type: 'integer', minimum: 0 },
-          subjectDefinitions: { type: 'string', maxLength: 2000 },
-          imageDescriptions: { type: 'string', maxLength: 3000 },
-          subtitleMode: { type: 'string', enum: ['on', 'off'] },
-          subtitleInput: { type: 'string', maxLength: 5000 },
-        },
-      },
-    },
-  }, async (request, reply) => {
-    const {
-      script = '',
-      style      = '',
-      ratio      = '9:16',
-      shotCount: overrideCount,
-      imageCount = 0,
-      subjectImageCount = 0,
-      videoCount = 0,
-      audioCount = 0,
-      subjectDefinitions = '',
-      imageDescriptions = '',
-      subtitleMode = 'on',
-      subtitleInput = '',
-    } = request.body
+  // ── TTS：逐镜合成 + 变速贴合 + 补静音对齐 ────────────────────────────────
+  //
+  // 为什么不是整条念完再按字数切：Seedance 只接受 4-15 的**整数秒**，而中文每个字的实际
+  // 时长差很多（数字、标点停顿、专有名词），按字数比例切出来的分镜时长和真实语音能差一两秒 ——
+  // 画面切了话还没说完，或者话说完了画面空着。
+  //
+  // 所以反过来做：**让语音去贴合整数秒的画面**。每镜单独合成 → 量出自然时长 → 取整秒作为
+  // 该镜的视频时长 → 用 SSML prosody rate 在 ±8% 内微调语速把它填满（8% 以内听不出来）→
+  // 尾部补静音到严丝合缝。拼起来的总音长严格等于各分镜时长之和，合并时不需要冻帧补尾。
+  const RATE_LIMIT = 0.08   // 语速微调上限，再多就听得出来了
+  // 锁时长模式（画面已经生成，不能重做）下放宽到 ±18% —— 听得出来一点，
+  // 但比重新生成一遍分镜视频划算得多。
+  const RATE_LIMIT_LOCKED = 0.18
+  const TAIL       = 0.45   // 每镜尾部留的换气/留白，也正好给画面收尾
+  // 锁时长时允许超出的上限：合并那步能用定格补足 1.5s 以内的缺口，
+  // 超过就真的对不上了（见 /voiceover/merge 的 targetDuration）
+  const LOCK_SLACK = 1.5
 
-    if (!script.trim() && !subtitleInput.trim()) {
-      return reply.code(400).send({ success: false, error: '视频需求和视频字幕不能全为空' })
-    }
+  // 最后一个词说完的时刻。没有词边界（纯符号之类）才退回文件长度。
+  const spokenEnd = (boundaries, fileDuration) => boundaries.length
+    ? Math.max(...boundaries.map(b => b.offset + b.duration))
+    : fileDuration
 
-    try {
-      const CPS = 3.5
-      const primaryText = subtitleInput.trim() || script
-      const scriptChars = primaryText.replace(/\s/g, '').length
-      const estimatedDuration = scriptChars / CPS
+  // 分镜的 voice_style → Azure 神经语音的 express-as 风格。
+  // styledegree 压在 1.0-1.2：再高就用力过猛，像在演播室念广告。
+  const VOICE_STYLE_MAP = {
+    calm:      { style: 'narration-relaxed', degree: 1.0 },
+    serious:   { style: 'serious',           degree: 1.1 },
+    worried:   { style: 'sad',               degree: 1.1 },
+    warm:      { style: 'gentle',            degree: 1.1 },
+    uplifting: { style: 'cheerful',          degree: 1.0 },
+  }
+  // 只有部分神经语音支持 express-as，而且各自支持的风格不一样。这里不维护完整表 ——
+  // 带风格先试一次，Azure 不认就退回无风格重合成一次（见 synthShot）。
 
-      const AUTO_SHOT_MAX = 20
-      const rawShotCount  = Math.round(estimatedDuration / 13)
-      const autoShotCount = Math.max(2, Math.min(AUTO_SHOT_MAX, rawShotCount))
-      const shotCount     = overrideCount ?? autoShotCount
+  async function synthShot({ text, voice, ratePct, style, outPath, azureKey, azureRegion }) {
+    const speechConfig = sdk.SpeechConfig.fromSubscription(azureKey, azureRegion)
+    speechConfig.speechSynthesisOutputFormat = sdk.SpeechSynthesisOutputFormat.Audio48Khz96KBitRateMonoMp3
+    const audioConfig = sdk.AudioConfig.fromAudioFileOutput(outPath)
+    const synthesizer = new sdk.SpeechSynthesizer(speechConfig, audioConfig)
 
-      const { shots, characterAnchor } = await generateVoiceoverShots(
-        script.trim() || `根据以下字幕内容生成对应的视频画面：${subtitleInput.trim()}`,
-        shotCount, style, ratio,
-        { imageCount, subjectImageCount, videoCount, audioCount, subjectDefinitions, imageDescriptions, subtitleMode, subtitleInput: subtitleInput.trim() }
-      )
-
-      // Duration based on each shot's subtitle length (always present)
-      const shotsWithDuration = shots.map(shot => {
-        const subtitleLen = (shot.subtitle || '').replace(/\s/g, '').length
-        const minDuration = Math.max(4, Math.ceil(subtitleLen / 3.5))
-        const duration = typeof shot.duration === 'number' && shot.duration >= minDuration && shot.duration <= 15
-          ? shot.duration : Math.min(15, minDuration)
-        return { ...shot, duration }
+    const boundaries = []
+    synthesizer.wordBoundary = (s, e) => {
+      boundaries.push({
+        text: e.text,
+        offset: e.audioOffset / 10000000,
+        duration: e.duration / 10000000,
       })
-
-      return {
-        success: true,
-        data: {
-          autoShotCount,
-          shotCount,
-          characterAnchor,
-          shots:              shotsWithDuration,
-          totalVideoDuration: shotsWithDuration.reduce((a, s) => a + s.duration, 0),
-        },
-      }
-    } catch (err) {
-      fastify.log.error(err)
-      return reply.code(500).send({ success: false, error: err.message })
     }
-  })
 
-  // ── TTS: 生成整条语音 + 逐词时间戳 ──────────────────
+    const inner = escapeXml(text)
+    let body = ratePct
+      ? `<prosody rate='${ratePct > 0 ? '+' : ''}${ratePct.toFixed(2)}%'>${inner}</prosody>`
+      : inner
+    const expr = style && VOICE_STYLE_MAP[style]
+    if (expr) {
+      body = `<mstts:express-as style='${expr.style}' styledegree='${expr.degree}'>${body}</mstts:express-as>`
+    }
+    const ssml = `<speak version='1.0' xml:lang='zh-CN' xmlns:mstts='https://www.w3.org/2001/mstts'>` +
+      `<voice name='${voice}'>${body}</voice></speak>`
+
+    const result = await new Promise((resolve, reject) => {
+      synthesizer.speakSsmlAsync(ssml,
+        r => { synthesizer.close(); resolve(r) },
+        err => { synthesizer.close(); reject(new Error(err)) },
+      )
+    })
+    if (result.reason !== sdk.ResultReason.SynthesizingAudioCompleted) {
+      // 这个音色不支持这个风格是最常见的原因 —— 去掉风格再来一次，
+      // 宁可没有情绪也要有旁白。
+      if (expr) {
+        fastify.log.warn(`音色 ${voice} 不支持风格 ${expr.style}，退回无风格合成`)
+        return synthShot({ text, voice, ratePct, outPath, azureKey, azureRegion })
+      }
+      throw new Error(`TTS 合成失败: ${sdk.ResultReason[result.reason]}`)
+    }
+    return { duration: await probeDuration(outPath), boundaries, styleApplied: !!expr }
+  }
+
   fastify.post('/tts', {
     schema: {
       body: {
@@ -981,96 +695,171 @@ ${script}`
         properties: {
           script: { type: 'string', minLength: 1, maxLength: 5000 },
           voice:  { type: 'string' },
+          // true = 画面时长已经定死（分镜视频已生成），让语音去贴合 shots[].duration，
+          // 而不是反过来按语音重算画面时长
+          lockDurations: { type: 'boolean' },
           shots: {
             type: 'array', minItems: 1, maxItems: 20,
             items: {
               type: 'object', required: ['subtitle'],
-              properties: { subtitle: { type: 'string' } },
+              properties: {
+                subtitle: { type: 'string' },
+                // 没有台词的空镜按它自己的时长补等长静音
+                duration: { type: 'number' },
+                // 这一镜的情绪，转成 Azure 的 express-as（calm/serious/worried/warm/uplifting）
+                voice_style: { type: 'string' },
+              },
             },
           },
         },
       },
     },
   }, async (request, reply) => {
-    const { script, voice = 'zh-CN-XiaoxiaoNeural', shots } = request.body
+    const { script, voice = 'zh-CN-XiaoxiaoNeural', shots, lockDurations = false } = request.body
 
     const azureKey    = process.env.AZURE_SPEECH_KEY    || ''
     const azureRegion = process.env.AZURE_SPEECH_REGION || 'eastasia'
-
     if (!azureKey) return reply.code(500).send({ success: false, error: '请配置 AZURE_SPEECH_KEY 环境变量' })
 
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceover-tts-'))
     try {
       fs.mkdirSync(UPLOAD_DIR, { recursive: true })
-
       const audioName = `voiceover-tts-${Date.now()}.mp3`
       const audioPath = path.join(UPLOAD_DIR, audioName)
 
-      const speechConfig = sdk.SpeechConfig.fromSubscription(azureKey, azureRegion)
-      speechConfig.speechSynthesisOutputFormat = sdk.SpeechSynthesisOutputFormat.Audio48Khz96KBitRateMonoMp3
-      const audioConfig = sdk.AudioConfig.fromAudioFileOutput(audioPath)
-      const synthesizer = new sdk.SpeechSynthesizer(speechConfig, audioConfig)
-
-      const wordBoundaries = []
-      synthesizer.wordBoundary = (s, e) => {
-        wordBoundaries.push({
-          text: e.text,
-          offset: e.audioOffset / 10000000,
-          duration: e.duration / 10000000,
+      // 一句台词都没有：退回整条合成（老行为），分镜时长按字数比例分
+      if (!shots.some(s => (s.subtitle || '').trim())) {
+        const { duration, boundaries } = await synthShot({
+          text: script, voice, ratePct: 0, outPath: audioPath, azureKey, azureRegion,
         })
+        const per = Math.max(4, Math.round(duration / shots.length))
+        return {
+          success: true,
+          data: {
+            audioUrl: `${(process.env.WEBHOOK_BASE_URL || '').replace(/\/$/, '')}/uploads/${audioName}`,
+            totalDuration: duration,
+            shotDurations: shots.map(() => per),
+            totalVideoDuration: per * shots.length,
+            wordBoundaries: boundaries,
+          },
+        }
       }
 
-      const ssml = `<speak version='1.0' xml:lang='zh-CN'><voice name='${voice}'>${escapeXml(script)}</voice></speak>`
+      // ── 逐镜合成 ───────────────────────────────────────────────────────
+      const segments = []
+      const overflow = []
+      for (let i = 0; i < shots.length; i++) {
+        const text = (shots[i].subtitle || '').trim()
+        if (!text) {
+          const silent = Math.min(15, Math.max(4, Math.round(shots[i].duration || 5)))
+          segments.push({ path: null, target: silent, boundaries: [] })
+          continue
+        }
 
-      const result = await new Promise((resolve, reject) => {
-        synthesizer.speakSsmlAsync(ssml,
-          r => { synthesizer.close(); resolve(r) },
-          err => { synthesizer.close(); reject(new Error(err)) },
-        )
-      })
+        const style = shots[i].voice_style
+        const rawPath = path.join(tmpDir, `shot-${i}-raw.mp3`)
+        let { duration, boundaries } = await synthShot({
+          text, voice, ratePct: 0, style, outPath: rawPath, azureKey, azureRegion,
+        })
+        let finalPath = rawPath
+        // 以**最后一个词说完**为准，不是 mp3 的文件长度 —— Azure 会在句尾自带
+        // 半秒到一秒的静音，拿文件长度算的话每镜都白白多出一段，还会把变速算歪。
+        let speechEnd = spokenEnd(boundaries, duration)
 
-      if (result.reason !== sdk.ResultReason.SynthesizingAudioCompleted) {
-        throw new Error(`TTS 合成失败: ${sdk.ResultReason[result.reason]}`)
+        // 目标秒数：默认按说完的时间向上取整（画面跟着语音走）；
+        // 锁时长模式下直接用调用方给的秒数 —— 那是已经生成好的画面，改不了。
+        let target = lockDurations && shots[i].duration
+          ? Math.min(15, Math.max(4, Math.round(shots[i].duration)))
+          : Math.min(15, Math.max(4, Math.round(speechEnd + TAIL)))
+        const rateLimit = lockDurations ? RATE_LIMIT_LOCKED : RATE_LIMIT
+        const factor = speechEnd / (target - TAIL)    // >1 要加速，<1 要放慢
+        if (Math.abs(factor - 1) > 0.02) {
+          const clamped = Math.min(1 + rateLimit, Math.max(1 - rateLimit, factor))
+          const adjPath = path.join(tmpDir, `shot-${i}.mp3`)
+          const r = await synthShot({
+            text, voice, ratePct: (clamped - 1) * 100, style, outPath: adjPath, azureKey, azureRegion,
+          })
+          boundaries = r.boundaries
+          speechEnd = spokenEnd(r.boundaries, r.duration)
+          finalPath = adjPath
+        }
+
+        // 加速到上限仍然装不下。音频照原样保留，不在这里悄悄截掉说到一半的话。
+        if (speechEnd + 0.15 > target) {
+          const needed = Math.ceil(speechEnd + 0.25)
+          if (lockDurations) {
+            // 画面动不了，只能把这一镜稍微拉长，让合并那步用定格补足；
+            // 超过 1.5s 定格也补不了，报给调用方（改短这镜旁白或重做这一镜）
+            target = Math.min(needed, target + LOCK_SLACK)
+            if (needed > target + 0.01) overflow.push(i + 1)
+          } else {
+            target = needed
+            if (target > 15) overflow.push(i + 1)
+          }
+        }
+        // 尾音留 0.15s 自然衰减，再补静音到整秒
+        segments.push({ path: finalPath, target, boundaries, trimEnd: speechEnd + 0.15 })
       }
 
-      const totalDuration = await probeDuration(audioPath)
-      if (!totalDuration || totalDuration <= 0) throw new Error('无法读取语音时长')
-
-      const charCounts = shots.map(s => (s.subtitle || '').replace(/\s/g, '').length)
-      const totalChars = charCounts.reduce((a, b) => a + b, 0) || 1
-
-      let shotDurations = charCounts.map(chars => {
-        const raw = totalDuration * (chars / totalChars)
-        return Math.max(4, Math.ceil(raw))
-      })
-      let videoDurSum = shotDurations.reduce((a, b) => a + b, 0)
-      if (videoDurSum < Math.ceil(totalDuration)) {
-        const deficit = Math.ceil(totalDuration) - videoDurSum
-        let maxIdx = 0
-        shotDurations.forEach((d, i) => { if (d > shotDurations[maxIdx]) maxIdx = i })
-        shotDurations[maxIdx] += deficit
+      // ── 每段补静音到整秒，再拼成一条 ────────────────────────────────────
+      const padded = []
+      for (let i = 0; i < segments.length; i++) {
+        const out = path.join(tmpDir, `pad-${i}.mp3`)
+        const args = segments[i].path
+          ? ['-y', '-i', segments[i].path,
+             '-af', `atrim=end=${segments[i].trimEnd.toFixed(3)},asetpts=N/SR/TB,apad`]
+          : ['-y', '-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=mono']
+        await execFileAsync('ffmpeg', [
+          ...args, '-t', segments[i].target.toFixed(3),
+          '-ar', '48000', '-ac', '1', '-c:a', 'libmp3lame', '-b:a', '96k', out,
+        ], { timeout: 120_000 })
+        padded.push(out)
       }
 
+      const listFile = path.join(tmpDir, 'concat.txt')
+      fs.writeFileSync(listFile, padded.map(p => `file '${p}'`).join('\n'))
+      await execFileAsync('ffmpeg', [
+        '-y', '-f', 'concat', '-safe', '0', '-i', listFile,
+        '-ar', '48000', '-ac', '1', '-c:a', 'libmp3lame', '-b:a', '96k', audioPath,
+      ], { timeout: 300_000 })
+
+      // 全局时间轴：每镜的词边界加上它的起点
+      const wordBoundaries = []
+      let offset = 0
+      for (const seg of segments) {
+        for (const b of seg.boundaries) wordBoundaries.push({ ...b, offset: b.offset + offset })
+        offset += seg.target
+      }
+
+      const shotDurations = segments.map(s => s.target)
+      const totalVideoDuration = shotDurations.reduce((a, b) => a + b, 0)
       const base = (process.env.WEBHOOK_BASE_URL || '').replace(/\/$/, '')
       return {
         success: true,
         data: {
-          audioUrl:      `${base}/uploads/${audioName}`,
-          totalDuration,
+          audioUrl: `${base}/uploads/${audioName}`,
+          // 拼出来的音轨长度就是各分镜时长之和，合并时 gap≈0，不需要冻帧补尾
+          totalDuration: await probeDuration(audioPath),
           shotDurations,
-          totalVideoDuration: shotDurations.reduce((a, b) => a + b, 0),
+          totalVideoDuration,
           wordBoundaries,
+          // 加速到上限仍装不下 15 秒的镜头（需要拆镜或改短旁白）
+          overflowShots: overflow,
         },
       }
     } catch (err) {
       fastify.log.error(err)
       return reply.code(500).send({ success: false, error: err.message })
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true })
     }
   })
 
   fastify.post('/merge', {
     schema: {
       body: {
-        type: 'object', required: ['videos', 'audioUrl'],
+        // audioUrl 可选：不传就保留各分镜视频自带的音轨（叙事短片的角色对白）
+        type: 'object', required: ['videos'],
         properties: {
           videos: {
             type: 'array', minItems: 1, maxItems: 20,
@@ -1080,6 +869,9 @@ ${script}`
                 url:      { type: 'string' },
                 subtitle: { type: 'string' },
                 duration: { type: 'number' },
+                // 这一镜按语音排好的目标秒数。生成回来的视频常有 ±0.1~0.3s 偏差，
+                // 逐镜累积起来后面的画面就和旁白错开了 —— 给了就把每条贴回整数秒。
+                targetDuration: { type: 'number' },
               },
             },
           },
@@ -1134,28 +926,56 @@ ${script}`
       if (succeeded.length < 1) {
         return reply.code(400).send({ success: false, error: '没有分镜视频下载成功，无法合并' })
       }
-      const videoPaths = succeeded.map(r => r.path)
+      let videoPaths = succeeded.map(r => r.path)
       const validVideos = succeeded.map(r => videos[r.index])
 
+      // ── 1.5 贴回目标时长 ────────────────────────────────────────────────
+      // 只在偏差 1.5s 以内时修（更大的偏差说明这一镜本身就没按预期生成，硬裁会切掉内容）
+      for (let i = 0; i < validVideos.length; i++) {
+        const target = validVideos[i].targetDuration
+        if (!target) continue
+        const actual = succeeded[i].duration
+        const diff = target - actual
+        if (!actual || Math.abs(diff) < 0.05 || Math.abs(diff) > 1.5) continue
+        const snapped = path.join(tmpDir, `snap-${i}.mp4`)
+        const filters = diff > 0
+          ? ['-vf', `tpad=stop_mode=clone:stop_duration=${diff.toFixed(3)}`]   // 短了：定格补足
+          : []                                                                 // 长了：直接截断
+        await execFileAsync('ffmpeg', [
+          '-y', '-i', videoPaths[i], ...filters,
+          '-t', target.toFixed(3),
+          '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
+          ...(await hasAudioStream(videoPaths[i]) ? ['-c:a', 'aac', '-b:a', '128k'] : ['-an']),
+          snapped,
+        ], { timeout: 300_000 })
+        videoPaths[i] = snapped
+        succeeded[i].duration = target
+      }
+
       // ── 2. 音频 & SRT ──────────────────────────────────────────────────────
-      let audioPath
-      const hasSubtitles = validVideos.some(v => v.subtitle && v.subtitle.trim())
+      // 有 audioUrl 才叠配音；没有就用分镜视频自带的音轨 —— 叙事短片的对白是
+      // Seedance 按 prompt 生成的，整轨覆盖会把角色说话盖掉。
+      const hasVoiceover = !!audioUrl
+      let audioPath = null
 
       // 使用已有的整块音频（不重新 TTS）
-      const localPath = localUploadPath(audioUrl)
-      if (localPath) {
-        audioPath = localPath
-      } else {
-        audioPath = path.join(tmpDir, 'voiceover.mp3')
-        const buf = await fetchMediaBuffer(audioUrl, { timeout: 30_000 })
-        fs.writeFileSync(audioPath, buf)
+      if (hasVoiceover) {
+        const localPath = localUploadPath(audioUrl)
+        if (localPath) {
+          audioPath = localPath
+        } else {
+          audioPath = path.join(tmpDir, 'voiceover.mp3')
+          const buf = await fetchMediaBuffer(audioUrl, { timeout: 30_000 })
+          fs.writeFileSync(audioPath, buf)
+        }
       }
 
       // ── 3. 测量音频时长 & 各分镜时长（缓存已记录精确时长） ─────────────────
-      const audioDur   = await probeDuration(audioPath)
+      const audioDur   = hasVoiceover ? await probeDuration(audioPath) : 0
       const videoDurs  = succeeded.map(r => r.duration)
       const videoTotal = videoDurs.reduce((a, b) => a + b, 0)
-      const gap = audioDur - videoTotal
+      // 没有配音轨就没有需要补的尾巴，画面多长就是多长
+      const gap = hasVoiceover ? audioDur - videoTotal : 0
 
       // ── 4. 生成 SRT（AI 断句 → 回退机械断句）──────────────
       const { width: videoWidth, height: videoHeight } = await probeWidth(videoPaths[0])
@@ -1163,7 +983,10 @@ ${script}`
       const maxPerLine = calcMaxCharsPerLine(videoWidth || 720, videoHeight || 1280, assFontSize)
       let srtContent = null
       const fullText = (fullSubtitle || '').trim() || validVideos.map(v => (v.subtitle || '').trim()).join('')
-      if (fullText) {
+      if (!hasVoiceover) {
+        // 没有整轨音频可对齐，字幕只能挂在各自那一镜的时间段里
+        srtContent = buildShotSRT(validVideos, videoDurs, maxPerLine) || null
+      } else if (fullText) {
         let segments = jiebaSegmentSubtitle(fullText, maxPerLine)
 
         // 用 wordBoundaries 精确对齐，否则按字数比例
@@ -1196,14 +1019,18 @@ ${script}`
         srtContent = srtLines.join('\n')
       }
 
-      // ── 5. concat 所有分镜（无音频） ──────────────────────────────────────────
+      // ── 5. concat 所有分镜（叠配音时丢掉原声，否则保留） ──────────────────────
       const concatTxt = path.join(tmpDir, 'concat.txt')
       const videoOnly = path.join(tmpDir, 'video_only.mp4')
-      fs.writeFileSync(concatTxt, videoPaths.map(p => `file '${p}'`).join('\n'))
+      const concatInputs = hasVoiceover
+        ? videoPaths
+        : await Promise.all(videoPaths.map((v, i) => ensureAudioStream(v, path.join(tmpDir, `silent-${i}.mp4`))))
+      fs.writeFileSync(concatTxt, concatInputs.map(p => `file '${p}'`).join('\n'))
 
       await execFileAsync('ffmpeg', [
         '-y', '-f', 'concat', '-safe', '0', '-i', concatTxt,
-        '-an', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
+        ...(hasVoiceover ? ['-an'] : ['-c:a', 'aac', '-b:a', '128k']),
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
         videoOnly,
       ], { timeout: 600_000 })
 
@@ -1224,7 +1051,18 @@ ${script}`
       const vfParts = [subtitleFilter, bannerFilter].filter(Boolean)
       const vfFilter = vfParts.length ? vfParts.join(',') : null
 
-      if (gap > 0.3) {
+      if (!hasVoiceover) {
+        // 音轨已经在 concat 里了，只需要烧字幕/横幅
+        if (vfFilter) {
+          await execFileAsync('ffmpeg', [
+            '-y', '-i', videoOnly, '-vf', vfFilter,
+            '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
+            '-c:a', 'copy', outPath,
+          ], { timeout: 300_000 })
+        } else {
+          fs.copyFileSync(videoOnly, outPath)
+        }
+      } else if (gap > 0.3) {
         const freezePath = path.join(tmpDir, 'video_freeze.mp4')
         await execFileAsync('ffmpeg', [
           '-y', '-i', videoOnly,
@@ -1497,7 +1335,8 @@ ${script}`
   fastify.post('/merge-async', {
     schema: {
       body: {
-        type: 'object', required: ['videos', 'audioUrl'],
+        // audioUrl 可选：不传就保留各分镜视频自带的音轨（叙事短片的角色对白）
+        type: 'object', required: ['videos'],
         properties: {
           videos: {
             type: 'array', minItems: 1, maxItems: 20,
@@ -1507,6 +1346,9 @@ ${script}`
                 url:      { type: 'string' },
                 subtitle: { type: 'string' },
                 duration: { type: 'number' },
+                // 这一镜按语音排好的目标秒数。生成回来的视频常有 ±0.1~0.3s 偏差，
+                // 逐镜累积起来后面的画面就和旁白错开了 —— 给了就把每条贴回整数秒。
+                targetDuration: { type: 'number' },
               },
             },
           },
