@@ -56,7 +56,10 @@ async function videoRoutes(fastify) {
       const shotsResult = await query(`SELECT * FROM shots WHERE video_id=$1 ORDER BY shot_number ASC`, [id])
       const mediaResult = await query(`SELECT * FROM video_media WHERE video_id=$1 ORDER BY sort_order ASC`, [id])
       const subjectsResult = await query(
-        `SELECT ps.* FROM video_subjects vs JOIN project_subjects ps ON ps.id = vs.subject_id WHERE vs.video_id=$1`,
+        // 顺序即 @图片N 的编号（页面按带图主体的先后排 1..N），所以必须定死 ——
+        // 不加 ORDER BY 就是堆顺序，重排一次角色就锚到别人的图上
+        `SELECT ps.* FROM video_subjects vs JOIN project_subjects ps ON ps.id = vs.subject_id
+          WHERE vs.video_id=$1 ORDER BY vs.created_at, vs.id`,
         [id]
       )
       return { success: true, data: { ...video, shots: shotsResult.rows, media_items: mediaResult.rows, video_subjects: subjectsResult.rows } }

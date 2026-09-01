@@ -5,7 +5,7 @@
 - `frontend/` — Next.js App Router (port 8113)
 - `backend/` — Fastify API server (port 8112)
 - Domain: `https://meeaws.xingke888.com` (本机 AWS 部署, nginx → frontend 8113, API 8112)
-  - `https://sd.xingke888.com` 是同一部署的另一个域名
+  - `https://sd.xingke888.com`、`https://v.xingke888.com`、`https://demo1.fidelityai.net` 是同一部署的其它域名
   - `https://mee.xingke888.com` 指向另一台服务器,不在本机
 
 ## Frontend
@@ -157,8 +157,11 @@
 - `backend/src/prompt/prompts.js` — 6 个 system prompt（**只有系统提示词**，拍摄手艺在 `skills/`）。前 5 个**逐字移植**：`SINGLE_SHOT` / `QCZH`(起承转合) / `STORYBOARD` / `ENHANCE` / `NARRATION`(解说纪录片)。后四个规定了严格 JSON 输出结构，前端与分镜导入依赖，勿随意改写。
   第 6 个 `DIALOGUE` **是新写的，不是移植**：`STORYBOARD`/`QCZH` 只产画面、没有台词字段，
   而换引擎前的老分镜接口会逐镜生成字幕 —— 所以叙事短片走**两步生成**，第二步补台词。
-  台词以**人物对白**为主，每句带 `speaker`（用外貌特征指代，不用人名）和 `type`
-  （`dialogue` 角色开口 / `narration` 画外旁白）—— 只有 `dialogue` 能写进 `prompt_en`。
+  台词是**旁白与对白穿插**（旁白占四分之一到三分之一，管空镜/转场/时间跳跃/开场收尾，
+  对白管当场发生的冲突与态度；一镜之内一般只用一种，两种都要时旁白在前对白在后），
+  每句带 `speaker`（用外貌特征指代，不用人名）和 `type`
+  （`dialogue` 角色开口 / `narration` 画外旁白）—— **两种都会写进 `prompt_en`**，
+  对白进 lip-sync 块、旁白进画外音块，字幕两类一起烧。
 - `backend/src/prompt/engine.js` — Anthropic SDK 封装，JSON 用 `jsonrepair` 兜底
 - `backend/src/prompt/skills/` — 拍摄手艺，一个 `.md` 一段（见「拍摄手艺（skills）」章节）
 - `backend/src/prompt/guide.js` — 提示词写作指南（结构化数据，非 HTML）
@@ -218,11 +221,27 @@ voiceover-v3 上「叙事短片 / 解说纪录片」是被提到页面层的生�
      —— **句式必须是英文的 `says:`**（Seedance 靠它识别台词），**引号里的中文原文不能翻译**
      （口型按引号里的字对齐，翻了就改动了要说出口的字）。`X` 取模型给的 `speaker_en`
      （英文外貌指代，用词要和该镜 `prompt_en` 里对这个人的描述对得上），漏写才退回中文 `speaker`
+   **`narration`（画外旁白）行也一样进 prompt_en**，另起一个 voiceover 块
+   （`Off-screen voiceover (narrator is NOT visible in frame, no lip sync…)`）——
+   它原来只进字幕，成片就是有字无声。字幕两类都烧，声音也就两类都要有；
+   旁白也算一个说话人，`DIALOGUE_SYSTEM` 要为它出一句音色描述，音色锁照贴。
    有 `dialogue` 台词的镜头 `roll_type` 一律回改成 `a_roll`（有人在画面里说话，按定义就是 A-roll），
    所以 roll_type 兜底移到了第二步**之前**
 
 第二步用 `effort: 'low'`，实测约 5s。**失败不阻断** —— 宁可交付没台词的分镜，也不要整个请求失败。
 解说纪录片自带 `narration_script`，跳过第二步。
+
+**字幕就是台词的准绳**（`prompt/speech.js` 的 `syncSpeechWithSubtitle`）：结构化的 `dialogue`
+没有落库（`shots` 只有 `subtitle` 一列），页面上改一次字幕，prompt 末尾那段台词就对不上了 ——
+画面里的人念旧词、烧上去的字幕是新词。所以**提交生成任务时按字幕重建台词块**：
+- 比对只看可读内容（标点空白不算），一致就原样返回
+- 音色行（`X 使用 @音频N …` / `Voice of X: …`）保留不动 —— 那是音色锁
+- **对白还是画外旁白，看画面里有没有人**（prompt 里有没有 `<主体N>`），不看 `roll_type`：
+  存量分镜有一批当初被判成旁白、可字幕明明是第一人称台词，人就站在画面里 —— 那就该让他开口
+- 原来没有台词块的（旁白从前不进 prompt，成片有字无声）在这一步补上；
+  **重建时若原来没有音色行，按角色定义里的音色绑定补一句**
+  （`角色「X」绑定@图片1、音色@音频1` → `<主体1> 使用 @音频1 …的音色说话`，
+  音色描述取素材说明里那条音频的说明）—— 缺这一句，同一个角色逐镜还是不同嗓子
 
 **叙事短片的人声来自视频自身**，不是 Azure TTS：
 - `generateAudio` 跟着视频类型走（切换类型的那个 effect 里同步，与 `subtitleInput` 同一处）：
@@ -292,6 +311,51 @@ front matter 用 `when_*` 声明生效条件，**加一条手艺 = 丢一个 `.m
 **音色锁**：`DIALOGUE_SYSTEM` 为每个角色产出一句英文 `voice_en`，后端把它**一字不改**地贴进
 该角色说话的每一个镜头（`Voice of X: …`）。我们每个分镜是一次独立生成，不锁音色，
 同一个角色逐镜声音都不一样。
+
+**`speaker_en` 也要归一**（和角色定义原文锁同一个道理）：`X says: “…”` 里的 `X` 是模型
+逐句自由写的英文指代，这镜 `the man in the navy shirt`、下镜 `the young office worker` ——
+每镜独立生成，Seedance 就当成两个人配两把嗓子。后端按 speaker 统计出现最多的那个写法
+（同频取更具体的长句），把全片所有台词行换成它，音色行里的 `X` 用的是同一个。
+
+**没绑就自动配**：生成分镜那一刻，页面给每个还没绑音色的角色从预设库挑一条钉死
+（`pickPresetVoice`，按角色卡文字猜性别和年龄段 → 音色库的 `青年/少年_少女/中年/儿童/老年`
+分组 + 性别；挑没被占用的，同性别同龄的角色用 index 错开不撞车）。挑好的音频当场入列参考素材，
+`voice_bindings` 用**刚算好的那份**拼（state 还没落地，所以 `subjectContext` 抽成了纯函数
+`buildSubjectContext`，能拿新值直接构建）。音频配额（`MEDIA_LIMITS.audio`）用完就不再配，
+剩下的角色退回模型写的英文音色描述。
+
+**页面上绑音色**：剧本分析的角色卡上有「选音色」，从已上传的参考音频里挑一条
+（按 **url** 绑，不按 uid —— 重开页面 media 的 uid 会变），存进 `params.scriptAnalysis[].linkedAudioUrl`。
+分镜请求多带一个 `voice_bindings`（一行一个 `角色「X」使用@音频N`），后端拿它**盖掉模型自己挑的
+`audio_ref`** —— 挑错一次，那个角色整条片子都用别人的嗓子。为了对上人，`DIALOGUE_SYSTEM` 的
+`voices` 多要一个 `subject_label`（出场角色里的名字）；漏写就退回模型自己挑的编号，
+只绑了一个角色且全片只有一个人说话时也认。`voice_zh` 漏写则用该条音频在页面上的说明兜底。
+
+**预设音色库**：方舟体验中心的素材清单扒在仓库根的 `materials/`（`all_materials.json` +
+`audio_presets.json`，另有 74 个 mp3 的本地副本）。后端 `GET /library/materials[?kind=audios|images|videos]`
+（`src/lib/materials.js`，启动后缓存一次）归一成 `{name, category, url, thumb}`：
+音色 80 条（青年/少年_少女/中年/儿童/老年，带 base64 头像和时长）、
+图片 71 张（服饰/环境/画风/角色）、视频 35 段（动作/运镜）。
+⚠️ JSON 里的 `videoUrl` / `imageUrl` **是坏的**（少了 `动作/`「服饰/」这层子目录、扩展名也不对），
+能用的地址是 `thumbnail` 去掉 `?x-tos-process=…`；音频的 `audioUrl` 是对的。
+文件托管在火山的公开 TOS 上，直接把地址交给 Seedance，不必转存到 `/uploads`。
+两个入口都能用：角色卡的「选音色」（搜索 + 试听，选中后**先入列参考素材**才有 `@音频N` 编号，
+多个角色共用同一条只入列一次），以及「参考素材」标题行的**「素材库」浮窗**
+（视频/音频/图片三个页签 + 搜索，点一下即入列，受 `MEDIA_LIMITS` 上限约束）。
+缩略图不落库（音色头像是 base64，太大）—— 列表渲染时按 url 现查 `presetThumbByUrl`，
+视频没有现成缩略图时用 `?x-tos-process=video/snapshot,t_0,h_600` 现取首帧。
+
+**图片编号与音色编号对齐**：绑了音色的角色，音频会被排到和它的图片编号同一位
+（`@图片1` 的角色 → `@音频1`），不属于角色的音频（环境音之类）排在后面。角色都选了音色时
+就是严格一一对应；对不上也不靠猜 —— 提示词里逐条写明了谁用哪条：
+`角色「小李」绑定@图片1、音色@音频1，外貌描述：…`、`音频1：角色「小李」的音色 — …`，
+素材说明里还有一句总的要求（形象引 `@图片N`、音色引 `@音频M`，两个都要写）。
+`anchor.js` 的 `DEF_LINE` 已放宽到能吃掉 `绑定@图片1` 后面那截音色绑定。
+
+**真正的克隆只有 `@音频N`**：一句英文音色描述只能把音色范围收窄，收不死。挂一段该角色的
+参考音频，`DIALOGUE_SYSTEM` 会给出 `audio_ref` + 中文音色描述，提示词里变成
+`X 使用@音频N低厚温润…的音色说话`（Seedance 官方约定：只给编号不描述音色会飘）。
+提交生成任务时每一镜都带上全部参考素材，所以 `@音频N` 的编号在各镜之间是一致的。
 
 ### 画面内不能有字
 
@@ -372,6 +436,38 @@ TTS 转成 Azure 的 `<mstts:express-as style=… styledegree=1.0~1.2>`。
 ### 角色锚定
 
 `/prompt/storyboard` 接受 `subject_definitions` 和 `image_descriptions`，拼进 **user message**（系统提示词逐字移植，不动），要求模型在 `prompt_en` 里用 `@图片N` 引用角色。返回前后端从 `prompt_en` 正则提取出 **`image_refs: number[]`** 挂到每个 shot 上 —— 从文本反解而不是让模型多输出一个字段，因为系统提示词规定了严格 JSON 结构，模型漏写新字段的概率远高于漏写它刚写进 prompt 的引用。
+
+**外貌只留静态特征**：`/voiceover/analyze-script` 的提示词明写了不许带道具、动作、表情、
+场景（`✗ …面带职业微笑，手边放着计算器和文件`），后端再用 `keepStaticLooks()` 按标点切句兜一道 ——
+命中「手里/拿着/放着/桌上/正在/坐在/微笑/表情/眼神…」的整句丢掉，但**戴在身上的配饰不算道具**
+（眼镜、手表、耳环留着）。整段都被判成道具时原样返回，宁可不干净也不要空。
+理由：这段文字会被下面的原文锁**逐镜一字不改**地贴进 `prompt_en`，写了道具就等于逼模型每镜摆同一个道具、
+挂同一个表情。老数据不会自动清洗 —— 重跑一次剧本分析即可。
+
+**角色定义原文锁**（和音色锁同一套路）：角色定义句由**后端逐镜统一贴**，不再采信模型自己写的那句。
+每一镜是独立生成，定义句必须每镜重写一遍，而模型逐镜自由发挥的结果是同一个人这镜「穿深蓝色衬衫」、
+下镜「穿深蓝色衬衫袖口挽起」，标签编号还可能和图片编号对不上 —— 脸和衣服就跟着一镜一变。
+
+- 原文来自页面的 `subject_definitions`（一行一个角色：`角色「X」绑定@图片N，外貌描述：…`）。
+  voiceover-v3 用**剧本分析的 `appearance`** 作原文，没分析过才退回主体自带 `description`；
+  性格不进定义句（定义要挑不随剧情变的静态特征）。**必须压成一行** —— 后端按行解析
+- 后端 `lockSubjectAnchors()`（`routes/prompt.js`）把模型写的 `将@图片N中…定义为<主体M>，…；`
+  整句换成 `将@图片N中<原文>定义为<主体N>`，贴回原处（前面是运镜画幅、后面是锁定短语，
+  两头不动）。模型漏写定义句、只用 `<主体N>` 或 `@图片N` 指代的，锚定句补在最前面
+- **标签编号归一到图片编号**：模型把 `@图片2` 的人叫成 `<主体1>` 时，整镜的标签一并换掉
+  （先落占位符再换，否则 1↔2 互换会自己撞上自己）
+- 外貌写着「见图片」「未提供」的角色不锁 —— 贴一句空定义还不如让模型照着图写；
+  没在 `subject_definitions` 里出现的图片编号（参考素材）原样不动
+- 模型仍旧被要求写定义句：让它写是为了逼它想清楚这一镜有谁出场，句子本身不作数
+- **三道闸**：分镜生成时锁一次（`/prompt/storyboard`）、提交生成任务时再锁一次
+  （`/video/generate` 收 `subject_definitions`，返回锁好的 `prompt`，页面回写进 shot）——
+  存量分镜和手改过的 prompt 只经过第二道；存量数据另有 `backend/scripts/relock-shot-anchors.js`
+  （默认演练，`--apply` 才写库，`--video <id>` 限定一条，可重复跑）
+- **没有原文时的兜底** `harvestDefs()`：主体没填描述、也没做过剧本分析的老数据，
+  就从这条视频**自己的分镜**里挑写得最全的那句定义当原文，全片统一到它 ——
+  没有可依的原文时，一致比准确更要紧
+- `@图片N` 的编号来自 `GET /videos/:id` 返回的 `video_subjects` 顺序，那条查询已经钉了
+  `ORDER BY vs.created_at, vs.id` —— 不加就是堆顺序，重排一次角色就锚到别人的图上
 
 **素材引用**：Seedance 提示词用 `@图片N` / `@视频N` / `@音频N` 指代 content 里第 N 个
 该类型素材（对应 content 数组里第 N 个 `image_url` / `video_url` / `audio_url`，三类各自从 1
@@ -467,24 +563,122 @@ cd frontend && NEXT_DIST_DIR=.next-dev pm2 start npm --name seedance20-frontend-
   超时会 abort 上游并给浏览器返回纯文本 `Internal Server Error`，而分镜生成要 35-60s。
   生产碰不到：nginx 的 `location /api/` 直连 8112，压根不经过 Next 的代理
 
+## Stripe 订阅支付
+
+`/billing` 页上的「充值」由人工扫码（微信/支付宝二维码 + 「联系管理员确认到账」）换成了
+**Stripe 按月订阅**：付款成功后 webhook 自动给 `users.quota` 加次数。扫码那套保留为
+弹窗里折叠的「其他支付方式」，大陆用户仍走人工。
+
+### 额度语义
+
+订阅到账是 **`quota += credits`（累加）**，不是「每月重置」—— `used` 是累计值且从不清零，
+剩余次数 = `quota - used`。改成重置就得连 `used` 一起重置，会把历史用量抹掉。
+
+### 套餐
+
+写在 `backend/src/lib/stripe.js` 的 `PLANS` 里（人民币，金额单位是「分」）：
+基础版 ¥199/100次、专业版 ¥499/300次、旗舰版 ¥999/800次。
+**换币种要重建 price**（Stripe 的 price 币种不可改），`stripe-setup-plans.js` 按
+`plan_key + currency` 找现成的、商品跨币种复用；旧币种的 price 记得归档。
+**Price ID 走 env**（`STRIPE_PRICE_BASIC` / `_PRO` / `_ULTRA`），调档位不用改代码。
+`node backend/scripts/stripe-setup-plans.js` 演练（不联网），加 `--apply` 才真去 Stripe
+建商品和价格并打印 env 片段；已建过的按 `metadata.plan_key` 复用，不会重复建。
+
+### 接口（`backend/src/routes/billing.js`）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/billing/plans` | 订阅套餐 + 一次性次数包 + `one_time_methods` + `enabled`（有没有配密钥）+ 每档 `configured`（有没有 Price ID） |
+| GET | `/billing/subscription` | 当前订阅、剩余额度、到账流水 |
+| POST | `/billing/checkout` | 传 `plan` 建订阅 Session、传 `pack` 建一次性 Session，返回 `url` 供前端跳转 |
+| POST | `/billing/portal` | Stripe 客户门户（改套餐/退订/发票） |
+| POST | `/billing/stripe/webhook` | Stripe 回调 |
+| POST | `/webhooks/buy` | **同一个 handler 的别名** —— Stripe 后台里配的就是这个路径 |
+
+### 域名
+
+站点绑了第三个域名 **`v.xingke888.com`**（`nginx-v.xingke888.com.conf`，与 meeaws / sd 同一套服务）。
+它比另外两个多一个 `location /webhooks/` → 8112，因为 Stripe 回调地址是
+`https://v.xingke888.com/webhooks/buy`，不在 `/api/` 前缀下。
+`APP_BASE_URL`（Checkout 付完跳回的地址）也指向它。
+
+### 几个必须这么写的地方
+
+- **验签要原始报文**：`attachRawBodyParser()` 在插件封装作用域内换掉 `application/json`
+  的 parser，把 buffer 挂到 `req.rawBody` 的同时照常解出 JSON 给同插件其它路由用。
+  nginx 那条 location 不能改写 body
+- **幂等靠 `billing_events` 的主键**：收到事件先 `INSERT ... ON CONFLICT DO NOTHING` 抢占，
+  抢不到就是重投，直接返回。Stripe 会重复投递同一事件，充值不能重复入账
+- **还要按付款对象再去重一次**：`billing_events.source_id`（订阅是发票 ID，次数包是
+  Checkout Session ID）上有部分唯一索引，撞了就跳过发放。因为同一笔款可能由两条不同事件送达：
+  `invoice.paid` / `invoice.payment_succeeded` 是两条，次数包的
+  `checkout.session.completed` / `checkout.session.async_payment_succeeded` 也是两条 ——
+  事件 ID 不同，主键去重拦不住
+- **次数包要看 `payment_status`**：支付宝/微信是异步确认的，`checkout.session.completed`
+  可能在 `unpaid` 状态就来了，这时不能发额度，等 `checkout.session.async_payment_succeeded`
+- **处理失败要把占位删掉**再返回 500，否则 Stripe 重投时会被当成重复事件跳过 —— 钱收了额度没到
+- **额度只在 `invoice.paid` 发放**，不在 `checkout.session.completed`：首期发票同样会触发
+  `invoice.paid`，两边都加就是双倍。续费也走这条，所以每个账期自动到账
+- **续费发票上没有 session 的 metadata**，`user_id` 必须挂到 `subscription_data.metadata` 上，
+  否则第二个月就追不回是谁付的（兜底还有 `billing_customers` 反查和 `billing_subscriptions` 反查）
+- **Stripe 2025 年挪过字段**：`invoice.subscription` → `invoice.parent.subscription_details.subscription`，
+  `line.price` → `line.pricing.price_details.price`，`subscription.current_period_end` →
+  `subscription.items.data[0].current_period_end`。SDK 固定在一个 API 版本，但账号后台可以单独设，
+  所以 `invoiceSubscriptionId()` / `subscriptionPeriodEnd()` 这几个 helper 两种形状都认
+- webhook 路由**不走鉴权**（Stripe 不带 Authorization 头），靠签名验身份
+- **结账页的邮箱预填**靠 Stripe customer 上的 `email`。`ensureCustomer()` 建号时写入，
+  已存在的每次结账前对一次并补写 —— 老 customer 可能建于用户还没绑邮箱时。
+  注意 `authMiddleware` 里 `request.user` 取的是 UPDATE 之前的行，SSO 首次带来新邮箱的
+  那一次请求读到的还是旧值，下一次才生效
+
+### 两条购买路径（支付宝/微信的硬限制）
+
+**支付宝和微信在 Stripe 里是一次性支付方式，不能用于订阅扣款** —— 实测报
+`The payment method \`alipay\` cannot be used in \`subscription\` mode.`。
+所以 `/billing` 上有两条并行的路：
+
+| | 模式 | 支付方式 | 额度 |
+|---|---|---|---|
+| 按月订阅（`PLANS`） | `mode: 'subscription'` | 仅银行卡 | 每账期自动到账 |
+| 一次性次数包（`PACKS`） | `mode: 'payment'` | 卡 / 支付宝 / 微信 | 买断，一次性到账 |
+
+次数包定价比同额度订阅高一档（¥249/¥599/¥1199 对 ¥199/¥499/¥999），
+否则没人会选自动续费。
+
+**查支付方式开没开要看对地方**：`accounts.retrieve().capabilities` 是 Connect 账号的概念，
+直连账号在那里查不到 alipay/wechat_pay（会误判成没开通）。正确的地方是
+`paymentMethodConfigurations.list()`，看默认配置里各方式的 `display_preference.value`。
+
+微信支付还要额外传 `payment_method_options: { wechat_pay: { client: 'web' } }`，不传会报错。
+
+### 数据表
+
+- `billing_customers` — user_id ↔ stripe_customer_id（一对一，复用它客户门户才看得到历史订单）
+- `billing_subscriptions` — 订阅状态、当前账期结束时间、是否已约定到期停止
+- `billing_events` — 事件去重锁，兼作到账流水（`credits_granted` / `amount` / `currency`）
+
 ## Deployment
 
 PM2 manages the production processes for seedance2.0 independently.
 
 ### Nginx
 
-两个域名指向同一套服务 (frontend 8113 / backend 8112),配置文件都在仓库根目录并从 sites-enabled 软链:
+四个域名指向同一套服务 (frontend 8113 / backend 8112),配置文件都在仓库根目录并从 sites-enabled 软链:
 
 | 域名 | 配置文件 |
 |---|---|
 | meeaws.xingke888.com | `nginx-meeaws.xingke888.com.conf` |
 | sd.xingke888.com | `nginx-sd.xingke888.com.conf` |
+| v.xingke888.com | `nginx-v.xingke888.com.conf` |
+| demo1.fidelityai.net | `nginx-demo1.fidelityai.net.conf` |
 
 - `location /api/` → `http://127.0.0.1:8112/`
 - `location /uploads/` → `http://127.0.0.1:8112/uploads/`
 - `location /` → `http://127.0.0.1:8113`
 
-Cloudflare 代理在前,SSL 为 Full(非严格)模式,源站两个域名共用 `/etc/letsencrypt/live/sd.xingke888.com/` 证书。
+Cloudflare 代理在前,SSL 为 Full(非严格)模式,源站的三个 xingke888 域名共用 `/etc/letsencrypt/live/sd.xingke888.com/` 证书。
+`demo1.fidelityai.net` 例外 —— DNS 直连源站没走 Cloudflare,有自己的 Let's Encrypt 证书
+(`/etc/letsencrypt/live/demo1.fidelityai.net/`),80 端口 301 跳 https。它和 v 一样带 `location /webhooks/`。
 meeaws 的 80 端口直接服务应用(不做 301),以免 CF 处于 Flexible 模式时产生重定向死循环。
 如需为 meeaws 签发独立证书: `sudo certbot certonly --webroot -w /var/www/html -d meeaws.xingke888.com`
 (配置里已保留 `/.well-known/acme-challenge/` 的 location)。

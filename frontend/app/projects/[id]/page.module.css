@@ -1071,7 +1071,7 @@
 }
 
 .mobilePagination {
-  display: none;
+  display: flex;
   justify-content: center;
   align-items: center;
   gap: 12px;
@@ -1095,8 +1095,3 @@
   color: #6b7280;
 }
 
-@media (max-width: 768px) {
-  .mobilePagination {
-    display: flex;
-  }
-}

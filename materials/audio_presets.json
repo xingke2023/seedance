@@ -1,0 +1,487 @@
+{
+  "total": 80,
+  "items": [
+    {
+      "name": "青年-女-亲切女声",
+      "duration": "5.6s",
+      "avatar": "data:image/png;base64,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",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-女-亲切女声.mp3"
+    },
+    {
+      "name": "少年_少女-女-少儿故事",
+      "duration": "11.4s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E5%B0%91%E5%84%BF%E6%95%85%E4%BA%8B.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/少年_少女-女-少儿故事.mp3"
+    },
+    {
+      "name": "青年-女-流畅女声",
+      "duration": "8.5s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E6%B5%81%E7%95%85%E5%A5%B3%E5%A3%B0.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-女-流畅女声.mp3"
+    },
+    {
+      "name": "青年-女-魅力女友",
+      "duration": "9.1s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E9%AD%85%E5%8A%9B%E5%A5%B3%E5%8F%8B_v2.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-女-魅力女友.mp3"
+    },
+    {
+      "name": "青年-女-黑猫侦探社咪仔",
+      "duration": "11.7s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E9%BB%91%E7%8C%AB%E4%BE%A6%E6%8E%A2%E7%A4%BE%E5%92%AA%E4%BB%94.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-女-黑猫侦探社咪仔.mp3"
+    },
+    {
+      "name": "青年-女-鸡汤女",
+      "duration": "9.3s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E9%B8%A1%E6%B1%A4%E5%A5%B3.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-女-鸡汤女.mp3"
+    },
+    {
+      "name": "青年-男-大壹",
+      "duration": "7s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E5%A4%A7%E5%A3%B9.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-男-大壹.mp3"
+    },
+    {
+      "name": "青年-男-儒雅逸辰",
+      "duration": "8.8s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E5%84%92%E9%9B%85%E9%80%B8%E8%BE%B0.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-男-儒雅逸辰.mp3"
+    },
+    {
+      "name": "青年-男-儒雅公子",
+      "duration": "6.3s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E5%84%92%E9%9B%85%E5%85%AC%E5%AD%90.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-男-儒雅公子.mp3"
+    },
+    {
+      "name": "少年_少女-女-萌丫头",
+      "duration": "9.8s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E8%90%8C%E4%B8%AB%E5%A4%B4.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/少年_少女-女-萌丫头.mp3"
+    },
+    {
+      "name": "青年-女-贴心女声",
+      "duration": "11.5s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E8%B4%B4%E5%BF%83%E5%A5%B3%E5%A3%B0.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-女-贴心女声.mp3"
+    },
+    {
+      "name": "中年-女-鸡汤妹妹",
+      "duration": "11.9s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E9%B8%A1%E6%B1%A4%E5%A6%B9%E5%A6%B9.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/中年-女-鸡汤妹妹.mp3"
+    },
+    {
+      "name": "少年_少女-男-亮嗓萌仔",
+      "duration": "5.7s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E4%BA%AE%E5%97%93%E8%90%8C%E4%BB%94.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/少年_少女-男-亮嗓萌仔.mp3"
+    },
+    {
+      "name": "儿童-男-懒音绵宝",
+      "duration": "3.7s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E6%87%92%E9%9F%B3%E7%BB%B5%E5%AE%9D.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/儿童-男-懒音绵宝.mp3"
+    },
+    {
+      "name": "青年-女-俏皮女声",
+      "duration": "8s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E4%BF%8F%E7%9A%AE%E5%A5%B3%E5%A3%B0.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-女-俏皮女声.mp3"
+    },
+    {
+      "name": "中年-男-四郎",
+      "duration": "12.4s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E5%9B%9B%E9%83%8E.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/中年-男-四郎.mp3"
+    },
+    {
+      "name": "中年-男-广告解说",
+      "duration": "11.6s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E5%B9%BF%E5%91%8A%E8%A7%A3%E8%AF%B4.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/中年-男-广告解说.mp3"
+    },
+    {
+      "name": "儿童-女-樱桃丸子",
+      "duration": "9.6s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E6%A8%B1%E6%A1%83%E4%B8%B8%E5%AD%90.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/儿童-女-樱桃丸子.mp3"
+    },
+    {
+      "name": "中年-女-武则天",
+      "duration": "14.9s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E6%AD%A6%E5%88%99%E5%A4%A9.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/中年-女-武则天.mp3"
+    },
+    {
+      "name": "儿童-女-佩奇猪",
+      "duration": "10s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E4%BD%A9%E5%A5%87%E7%8C%AA.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/儿童-女-佩奇猪.mp3"
+    },
+    {
+      "name": "少年_少女-男-熊二",
+      "duration": "9.4s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E7%86%8A%E4%BA%8C.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/少年_少女-男-熊二.mp3"
+    },
+    {
+      "name": "青年-男-猴哥",
+      "duration": "15s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E7%8C%B4%E5%93%A5.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-男-猴哥.mp3"
+    },
+    {
+      "name": "儿童-男-天才童声",
+      "duration": "13.1s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E5%A4%A9%E6%89%8D%E7%AB%A5%E5%A3%B0.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/儿童-男-天才童声.mp3"
+    },
+    {
+      "name": "青年-女-温柔小雅",
+      "duration": "13s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E6%B8%A9%E6%9F%94%E5%B0%8F%E9%9B%85.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-女-温柔小雅.mp3"
+    },
+    {
+      "name": "青年-男-咆哮小哥",
+      "duration": "5.5s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E5%92%86%E5%93%AE%E5%B0%8F%E5%93%A5.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-男-咆哮小哥.mp3"
+    },
+    {
+      "name": "青年-男-醇厚低音",
+      "duration": "11.2s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E9%86%87%E5%8E%9A%E4%BD%8E%E9%9F%B3.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-男-醇厚低音.mp3"
+    },
+    {
+      "name": "青年-女-倾心少女",
+      "duration": "4.1s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E5%80%BE%E5%BF%83%E5%B0%91%E5%A5%B3.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-女-倾心少女.mp3"
+    },
+    {
+      "name": "青年-女-文静毛毛",
+      "duration": "8.5s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E6%96%87%E9%9D%99%E6%AF%9B%E6%AF%9B.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-女-文静毛毛.mp3"
+    },
+    {
+      "name": "青年-男-悠悠君子",
+      "duration": "8.1s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E6%82%A0%E6%82%A0%E5%90%9B%E5%AD%90.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-男-悠悠君子.mp3"
+    },
+    {
+      "name": "中年-男-Noah",
+      "duration": "7.1s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/Noah.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/中年-男-Noah.mp3"
+    },
+    {
+      "name": "青年-男-Xavier",
+      "duration": "7.5s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/Xavier.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-男-Xavier.mp3"
+    },
+    {
+      "name": "儿童-男-KevinMcCallister",
+      "duration": "9.8s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/Kevin%20McCallister.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/儿童-男-KevinMcCallister.mp3"
+    },
+    {
+      "name": "老年-男-ClownMan",
+      "duration": "9.7s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/Clown%20Man.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/老年-男-ClownMan.mp3"
+    },
+    {
+      "name": "青年-男-Chucky",
+      "duration": "9.2s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/Chucky.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-男-Chucky.mp3"
+    },
+    {
+      "name": "青年-男-Jigsaw",
+      "duration": "8.5s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/Jigsaw.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-男-Jigsaw.mp3"
+    },
+    {
+      "name": "青年-男-Zayne",
+      "duration": "8.9s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/Zayne.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-男-Zayne.mp3"
+    },
+    {
+      "name": "青年-女-Charlie",
+      "duration": "5.1s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/Charlie.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-女-Charlie.mp3"
+    },
+    {
+      "name": "青年-女-贴心妹妹",
+      "duration": "5.6s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E8%B4%B4%E5%BF%83%E5%A6%B9%E5%A6%B9.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-女-贴心妹妹.mp3"
+    },
+    {
+      "name": "青年-女-小何2.0",
+      "duration": "6.4s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E5%B0%8F%E4%BD%95.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-女-小何2.0.mp3"
+    },
+    {
+      "name": "青年-男-小天2.0",
+      "duration": "6.2s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E5%B0%8F%E5%A4%A9.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-男-小天2.0.mp3"
+    },
+    {
+      "name": "青年-男-云舟2.0",
+      "duration": "6.8s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E4%BA%91%E8%88%9F.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-男-云舟2.0.mp3"
+    },
+    {
+      "name": "青年-女-爽快思思",
+      "duration": "9.6s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E7%88%BD%E5%BF%AB%E6%80%9D%E6%80%9D.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-女-爽快思思.mp3"
+    },
+    {
+      "name": "青年-女-儿童绘本",
+      "duration": "11.1s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E5%84%BF%E7%AB%A5%E7%BB%98%E6%9C%AC.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-女-儿童绘本.mp3"
+    },
+    {
+      "name": "青年-女-温柔女神",
+      "duration": "9.7s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E6%B8%A9%E6%9F%94%E5%A5%B3%E7%A5%9E2.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-女-温柔女神.mp3"
+    },
+    {
+      "name": "青年-女-暖阳女声",
+      "duration": "10.2s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E6%9A%96%E9%98%B3%E5%A5%B3%E5%A3%B0.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-女-暖阳女声.mp3"
+    },
+    {
+      "name": "青年-男-儒雅男友",
+      "duration": "4.6s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E5%84%92%E9%9B%85%E7%94%B7%E5%8F%8B.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-男-儒雅男友.mp3"
+    },
+    {
+      "name": "少年_少女-男-炀炀",
+      "duration": "5s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/premium-default-avatar.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/少年_少女-男-炀炀.mp3"
+    },
+    {
+      "name": "青年-女-Vivi",
+      "duration": "11.6s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/Vivi.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-女-Vivi.mp3"
+    },
+    {
+      "name": "青年-男-解说小明",
+      "duration": "11.4s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E8%A7%A3%E8%AF%B4%E5%B0%8F%E6%98%8E.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-男-解说小明.mp3"
+    },
+    {
+      "name": "青年-女-清新女声",
+      "duration": "10.9s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E6%B8%85%E6%96%B0%E5%A5%B3%E5%A3%B0.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-女-清新女声.mp3"
+    },
+    {
+      "name": "青年-女-Tina老师",
+      "duration": "9.9s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/Tina%E8%80%81%E5%B8%88.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-女-Tina老师.mp3"
+    },
+    {
+      "name": "少年_少女-男-温暖少年",
+      "duration": "6.8s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E6%B8%A9%E6%9A%96%E5%B0%91%E5%B9%B4.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/少年_少女-男-温暖少年.mp3"
+    },
+    {
+      "name": "青年-男-温暖阿虎",
+      "duration": "5.8s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E6%B8%A9%E6%9A%96%E9%98%BF%E8%99%8E.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-男-温暖阿虎.mp3"
+    },
+    {
+      "name": "少年_少女-女-灿灿",
+      "duration": "6.3s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E7%81%BF%E7%81%BF.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/少年_少女-女-灿灿.mp3"
+    },
+    {
+      "name": "青年-男-温柔小哥",
+      "duration": "8.4s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E6%B8%A9%E6%9F%94%E5%B0%8F%E5%93%A5.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-男-温柔小哥.mp3"
+    },
+    {
+      "name": "青年-男-率真小伙",
+      "duration": "7.1s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E7%8E%87%E7%9C%9F%E5%B0%8F%E4%BC%99.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-男-率真小伙.mp3"
+    },
+    {
+      "name": "青年-男-活泼爽朗",
+      "duration": "5.4s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E6%B4%BB%E6%B3%BC%E7%88%BD%E6%9C%97.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-男-活泼爽朗.mp3"
+    },
+    {
+      "name": "青年-男-开朗轻快",
+      "duration": "5.4s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E5%BC%80%E6%9C%97%E8%BD%BB%E5%BF%AB.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-男-开朗轻快.mp3"
+    },
+    {
+      "name": "青年-女-温柔文雅",
+      "duration": "8.7s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E6%B8%A9%E6%9F%94%E6%96%87%E9%9B%85.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-女-温柔文雅.mp3"
+    },
+    {
+      "name": "青年-男-暖心体贴",
+      "duration": "5.8s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E6%9A%96%E5%BF%83%E4%BD%93%E8%B4%B4.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-男-暖心体贴.mp3"
+    },
+    {
+      "name": "青年-女-知性温婉",
+      "duration": "9.1s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E7%9F%A5%E6%80%A7%E6%B8%A9%E5%A9%89.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-女-知性温婉.mp3"
+    },
+    {
+      "name": "中年-女-心灵鸡汤",
+      "duration": "13s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E5%BF%83%E7%81%B5%E9%B8%A1%E6%B1%A4.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/中年-女-心灵鸡汤.mp3"
+    },
+    {
+      "name": "青年-女-开朗姐姐",
+      "duration": "12.6s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E5%BC%80%E6%9C%97%E5%A7%90%E5%A7%90.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-女-开朗姐姐.mp3"
+    },
+    {
+      "name": "青年-女-清澈梓梓",
+      "duration": "10.4s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E6%B8%85%E6%BE%88%E6%A2%93%E6%A2%93.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-女-清澈梓梓.mp3"
+    },
+    {
+      "name": "青年-女-甜美小源",
+      "duration": "13.2s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E7%94%9C%E7%BE%8E%E5%B0%8F%E6%BA%90.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-女-甜美小源.mp3"
+    },
+    {
+      "name": "少年_少女-女-邻家女孩",
+      "duration": "10.4s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E9%82%BB%E5%AE%B6%E5%A5%B3%E5%AD%A9.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/少年_少女-女-邻家女孩.mp3"
+    },
+    {
+      "name": "青年-男-清爽男大",
+      "duration": "10.8s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E6%B8%85%E7%88%BD%E7%94%B7%E5%A4%A7.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-男-清爽男大.mp3"
+    },
+    {
+      "name": "青年-女-知性女声",
+      "duration": "11.3s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E7%9F%A5%E6%80%A7%E5%A5%B3%E5%A3%B0.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-女-知性女声.mp3"
+    },
+    {
+      "name": "青年-女-魅力苏菲",
+      "duration": "7.4s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E9%AD%85%E5%8A%9B%E8%8B%8F%E8%8F%B2.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-女-魅力苏菲.mp3"
+    },
+    {
+      "name": "青年-男-开朗学长",
+      "duration": "7s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E5%BC%80%E6%9C%97%E5%AD%A6%E9%95%BF.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-男-开朗学长.mp3"
+    },
+    {
+      "name": "青年-女-温柔白月光",
+      "duration": "6s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E6%B8%A9%E6%9F%94%E7%99%BD%E6%9C%88%E5%85%89.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-女-温柔白月光.mp3"
+    },
+    {
+      "name": "青年-女-贴心闺蜜",
+      "duration": "4.8s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E8%B4%B4%E5%BF%83%E9%97%BA%E8%9C%9C.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-女-贴心闺蜜.mp3"
+    },
+    {
+      "name": "青年-女-初恋女友",
+      "duration": "5.3s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E5%88%9D%E6%81%8B%E5%A5%B3%E5%8F%8B.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-女-初恋女友.mp3"
+    },
+    {
+      "name": "青年-女-纯澈女生",
+      "duration": "4s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E7%BA%AF%E6%BE%88%E5%A5%B3%E7%94%9F.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-女-纯澈女生.mp3"
+    },
+    {
+      "name": "青年-男-冷酷哥哥",
+      "duration": "8.8s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E5%86%B7%E9%85%B7%E5%93%A5%E5%93%A5.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-男-冷酷哥哥.mp3"
+    },
+    {
+      "name": "青年-男-快乐小东",
+      "duration": "12.7s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E5%BF%AB%E4%B9%90%E5%B0%8F%E4%B8%9C.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-男-快乐小东.mp3"
+    },
+    {
+      "name": "青年-男-阳光阿辰",
+      "duration": "6.4s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E9%98%B3%E5%85%89%E9%98%BF%E8%BE%B0.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-男-阳光阿辰.mp3"
+    },
+    {
+      "name": "青年-女-知心姐姐",
+      "duration": "6.9s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E7%9F%A5%E5%BF%83%E5%A7%90%E5%A7%90.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-女-知心姐姐.mp3"
+    },
+    {
+      "name": "儿童-女-元气甜妹",
+      "duration": "6.5s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E5%85%83%E6%B0%94%E7%94%9C%E5%A6%B9.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/儿童-女-元气甜妹.mp3"
+    },
+    {
+      "name": "青年-男-机灵小伙",
+      "duration": "5.4s",
+      "avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/%E6%9C%BA%E7%81%B5%E5%B0%8F%E4%BC%99.png",
+      "audioUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色/青年-男-机灵小伙.mp3"
+    }
+  ],
+  "baseUrl": "https://ark-common-storage-prod-cn-beijing.tos-cn-beijing.volces.com/presets/experience/gen_video/materials/音频/音色",
+  "note": "audioUrl uses .mp3 by default; some voices may use .wav format"
+}

@@ -133,8 +133,9 @@ export default function VideoEditorPage() {
   const subjectContext = useMemo(() => {
     const withImage = videoSubjects.filter(sub => sub.image_url);
     return {
+      // 外貌描述压成一行 —— 后端按行解析这份原文，逐镜原样贴进 prompt_en 的定义句
       characterDefs: withImage
-        .map((sub, i) => `角色「${sub.label}」绑定@图片${i + 1}，外貌描述：${sub.description || '见图片'}`)
+        .map((sub, i) => `角色「${sub.label}」绑定@图片${i + 1}，外貌描述：${(sub.description || '').replace(/\s*\n+\s*/g, '，').trim() || '见图片'}`)
         .join('\n'),
       imageDescriptions: withImage
         .map((sub, i) => `图片${i + 1}：角色「${sub.label}」— ${sub.description || '见图片'}`)
@@ -178,8 +179,10 @@ export default function VideoEditorPage() {
   async function handleGenerateVideo(shot: Shot) {
     setGenerating(prev => new Set(prev).add(shot.id));
     try {
-      const res = await api.post<{ taskId: string }>('/video/generate', {
+      const res = await api.post<{ taskId: string; prompt?: string }>('/video/generate', {
         prompt: shot.prompt,
+        // 角色原文：后端提交前把定义句统一换成它（见 CLAUDE.md「角色定义原文锁」）
+        subject_definitions: subjectContext.characterDefs || undefined,
         ratio: shot.ratio || ratio,
         duration: shot.duration,
         model,
@@ -187,7 +190,9 @@ export default function VideoEditorPage() {
         region: region !== 'overseas' ? region : undefined,
       });
       if (res?.taskId) {
-        await handleShotUpdate(shot.id, { task_id: res.taskId, task_status: 'pending' });
+        // 定义句被锁改写过就一并回写，页面和库里都别留旧文本
+        const locked = res.prompt && res.prompt !== shot.prompt ? { prompt: res.prompt } : {};
+        await handleShotUpdate(shot.id, { task_id: res.taskId, task_status: 'pending', ...locked });
         pollShotTask(shot.id, res.taskId);
       }
     } catch {}

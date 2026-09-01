@@ -508,12 +508,20 @@ export default function ProjectDetailPage() {
   const [aiPromptTab, setAiPromptTab] = useState('');
   const [subjectPage, setSubjectPage] = useState(0);
   const [videoPage, setVideoPage] = useState(0);
-  const PAGE_SIZE = 8;
+  const PAGE_SIZE = 10;
   const aiBottomRef = useRef<HTMLDivElement>(null);
   const aiFileRef = useRef<HTMLInputElement>(null);
   const aiIdRef = useRef(0);
 
   useEffect(() => { aiBottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [aiTurns]);
+
+  // 删除/新增之后当前页可能越界，收回到最后一页
+  useEffect(() => {
+    setSubjectPage(p => Math.min(p, Math.max(0, Math.ceil(subjects.length / PAGE_SIZE) - 1)));
+  }, [subjects.length]);
+  useEffect(() => {
+    setVideoPage(p => Math.min(p, Math.max(0, Math.ceil(videos.length / PAGE_SIZE) - 1)));
+  }, [videos.length]);
 
   function fileToBase64(file: File): Promise<string> {
     return new Promise((resolve, reject) => {

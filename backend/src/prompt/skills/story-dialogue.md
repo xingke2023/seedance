@@ -7,11 +7,16 @@ when: video_type=story —— 第一步就要排出「有人能开口」的镜�
 source: OpenMontage seedance-2-0/SKILL.md（lip-sync、多人同框）+ skills/creative/cinematic.md（镜头时长呼吸）+ skills/creative/storytelling.md（主体进出画四原语）
 ---
 ## 对白优先（本片是有人物对白的剧情片）
+0. **旁白和对白是穿插着来的**：排镜时刻意留出四分之一到三分之一的镜头当旁白落点
+   （空镜、转场、时间跳跃、开场收尾），第二步会给它们配画外旁白；其余镜头排成有人开口说话的。
+   通篇全是对白会像舞台剧，全是旁白会像解说片
 1. **至少三分之二的镜头要有角色在画面里说话**，这些镜头 roll_type 标 a_roll
 2. 说话的镜头要看得见人：以中景/近景/特写为主，人物面部清晰、正面或侧前方，
    不要用背影、剪影或远到看不清脸的全景；prompt_en 里明确写出人物正在说话
    （talking to …, mid-conversation, speaking to camera）
-3. 纯空镜（b_roll）只作过渡或情绪铺垫，不要连续出现超过 1 个
+3. 纯空镜（b_roll）只作过渡或情绪铺垫，不要连续出现超过 1 个 ——
+   空镜可以配画外旁白（后续追加到 prompt 末尾的 voiceover 块），它同样会出声、也会烧成字幕；
+   画面描述里照样不要写旁白内容，也不要让画面里的人对着镜头念
 4. 场景要给对白发生的理由：两个人同处一个空间、打电话、面对镜头倾诉都可以
 5. **prompt_en 里不要写具体台词内容** —— 用 talking to …, mid-conversation, speaking to camera
    表示这个人在说话就够了。台词由后续统一追加到 prompt 末尾；画面描述里再写一遍不一样的台词，

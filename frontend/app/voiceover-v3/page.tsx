@@ -1,6 +1,7 @@
 'use client';
 
 import { Fragment, useRef, useState, useEffect, useCallback, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import dynamic from 'next/dynamic';
@@ -79,6 +80,134 @@ interface MediaItem {
   uploading?: boolean;
   uploadProgress?: number;
 }
+
+// 剧本分析出来的角色卡：形象来自 AI 分析，头像和音色是人工绑的
+type AnalysisItem = {
+  label: string; type: string; appearance: string; personality: string;
+  linkedSubjectId?: string; linkedAudioUrl?: string;
+  _pickerOpen?: boolean; _voicePickerOpen?: boolean;
+};
+
+// ─── 自动配音色 ──────────────────────────────────────────────────────────────
+// 同一个角色全片必须是同一把嗓子。人工绑了就用人工的；没绑的，生成分镜时从预设音色库
+// （方舟那 80 条）按性别年龄挑一条最合适的钉死 —— 让模型每镜自己发挥英文音色描述，
+// 只能把范围收窄，收不死。
+type VoicePreset = { name: string; category: string; gender: string; duration: string; url: string; avatar: string };
+
+// 从角色卡的文字里读性别；读不出来按不限处理
+function guessGender(a: AnalysisItem): '男' | '女' | '' {
+  const t = `${a.label} ${a.appearance} ${a.personality}`;
+  if (/女|母亲|妈妈|姐|妹|奶奶|外婆|阿姨|女士|女性/.test(t)) return '女';
+  if (/男|父亲|爸爸|哥|弟|爷爷|外公|叔叔|先生|男性/.test(t)) return '男';
+  return '';
+}
+
+// 年龄段映射到音色库的分组名（青年 / 少年_少女 / 中年 / 儿童 / 老年）
+function guessAgeGroup(a: AnalysisItem): string {
+  const t = `${a.label} ${a.appearance} ${a.personality}`;
+  const m = t.match(/(\d{1,2})\s*(?:岁|多岁)/);
+  const age = m ? Number(m[1]) : 0;
+  if (age) {
+    if (age < 13) return '儿童';
+    if (age < 18) return '少年_少女';
+    if (age < 36) return '青年';
+    if (age < 60) return '中年';
+    return '老年';
+  }
+  if (/儿童|小孩|孩子|幼儿|小男孩|小女孩/.test(t)) return '儿童';
+  if (/少年|少女|中学生|高中生|青少年/.test(t)) return '少年_少女';
+  if (/老人|老年|爷爷|奶奶|外公|外婆|老先生|老太太/.test(t)) return '老年';
+  if (/中年|大叔|大妈|阿姨|叔叔/.test(t)) return '中年';
+  return '青年';   // 剧本里最常见的默认
+}
+
+// 挑一条没被别的角色占用的音色：先按「分组+性别」，放宽到「分组」，再放宽到「性别」，
+// 最后随便给一条。同一批角色里用 index 错开，两个同性别同龄的角色不会撞同一把嗓子。
+function pickPresetVoice(a: AnalysisItem, presets: VoicePreset[], taken: Set<string>, seed: number): VoicePreset | null {
+  if (presets.length === 0) return null;
+  const group = guessAgeGroup(a);
+  const gender = guessGender(a);
+  const pools = [
+    presets.filter(v => v.category === group && (!gender || v.gender === gender)),
+    presets.filter(v => v.category === group),
+    presets.filter(v => !gender || v.gender === gender),
+    presets,
+  ];
+  for (const pool of pools) {
+    const free = pool.filter(v => !taken.has(v.url));
+    if (free.length > 0) return free[seed % free.length];
+  }
+  return null;
+}
+
+// 角色/素材上下文的构建（纯函数）。生成分镜那一刻可能刚给角色自动配了音色，
+// state 还没落地，所以要能拿「算好的那份」直接构建，不能只依赖 useMemo 里的旧值。
+function buildSubjectContext(videoSubjects: ProjectSubject[], mediaItems: MediaItem[], scriptAnalysis: AnalysisItem[]) {
+    const readyImages = mediaItems.filter(m => m.url && !m.uploading && m.mediaType === 'image');
+    const withImage    = videoSubjects.filter(s => s.image_url);
+    const withoutImage = videoSubjects.filter(s => !s.image_url);
+    const nameOf = (s: ProjectSubject) =>
+      scriptAnalysis.find(a => a.linkedSubjectId === s.id)?.label || s.label;
+    const descOf = (s: ProjectSubject) => {
+      const a = scriptAnalysis.find(x => x.linkedSubjectId === s.id);
+      return a ? `${a.appearance}；${a.personality}` : (s.description || '');
+    };
+    // 角色定义句用的**外貌原文**：剧本分析给的形象描述优先，没分析过才退回主体自带的描述。
+    // 性格不进定义句 —— 定义要挑不随剧情变的静态特征（见 character-anchoring）。
+    // 必须压成一行：后端按行解析这份原文，逐镜一字不改地贴进 prompt_en。
+    const visualOf = (s: ProjectSubject) => {
+      const a = scriptAnalysis.find(x => x.linkedSubjectId === s.id);
+      return (a?.appearance || s.description || '').replace(/\s*\n+\s*/g, '，').trim();
+    };
+    // 角色的音色：@图片N 的那个人用哪一条 @音频M。绑定挂在剧本分析的角色卡上，
+    // 这里按主体反查回去 —— 形象和音色是同一个人的两半，提示词里要一起写明。
+    const readyAudios0 = mediaItems.filter(m => m.url && !m.uploading && m.mediaType === 'audio');
+    const audioNumOf = (s: ProjectSubject) => {
+      const url = scriptAnalysis.find(a => a.linkedSubjectId === s.id)?.linkedAudioUrl;
+      const n = url ? readyAudios0.findIndex(m => m.url === url) : -1;
+      return n >= 0 ? n + 1 : 0;
+    };
+    const characterLines = [
+      ...withImage.map((s, i) => {
+        const an = audioNumOf(s);
+        return `角色「${nameOf(s)}」绑定@图片${i + 1}${an ? `、音色@音频${an}` : ''}，外貌描述：${visualOf(s) || '见图片'}`;
+      }),
+      ...withoutImage.map(s => {
+        const an = audioNumOf(s);
+        return `角色「${nameOf(s)}」${an ? `绑定音色@音频${an}` : ''}，外貌描述：${visualOf(s) || '未提供'}`;
+      }),
+    ];
+    // 素材编号按类型各排各的 —— content 里图片/视频/音频是分开计数的，
+    // Seedance 提示词里用 图片N / 视频N / 音频N 指代第 N 个该类型素材。
+    const readyVideos = mediaItems.filter(m => m.url && !m.uploading && m.mediaType === 'video');
+    const readyAudios = readyAudios0;
+    // 音频挂到了哪个角色身上，说明里就点名写出来（模型才知道这条音色是谁的）
+    const audioOwner = new Map<string, string>();
+    videoSubjects.forEach(s => {
+      const url = scriptAnalysis.find(a => a.linkedSubjectId === s.id)?.linkedAudioUrl;
+      if (url) audioOwner.set(url, nameOf(s));
+    });
+    const descLines = [
+      ...withImage.map((s, i) => {
+        const an = audioNumOf(s);
+        return `图片${i + 1}：角色「${nameOf(s)}」${an ? `（音色见@音频${an}）` : ''}— ${descOf(s) || '见图片'}`;
+      }),
+      ...readyImages.map((m, i) => `图片${withImage.length + i + 1}：参考素材「${m.name || '素材'}」— ${m.description || ''}`),
+      ...readyVideos.map((m, i) => `视频${i + 1}：参考视频「${m.name || '素材'}」— ${m.description || ''}`),
+      ...readyAudios.map((m, i) => {
+        const owner = audioOwner.get(m.url || '');
+        return owner
+          ? `音频${i + 1}：角色「${owner}」的音色 — ${m.description || m.name || ''}`
+          : `音频${i + 1}：参考音频「${m.name || '素材'}」— ${m.description || ''}`;
+      }),
+    ];
+    return {
+      characterDefs:     characterLines.join('\n'),
+      imageDescriptions: descLines.join('\n'),
+      subjectsWithImage: withImage,   // 1-based 编号 → 角色，供 image_refs 反查
+    };
+}
+
 
 interface AvatarItem { assetId: string; label: string; thumb: string; }
 
@@ -1116,7 +1245,7 @@ export default function VoiceoverPage() {
   const [projectSubjects, setProjectSubjects] = useState<ProjectSubject[]>([]);
   const [videoSubjects, setVideoSubjects] = useState<ProjectSubject[]>([]);
   const [showSubjectPicker, setShowSubjectPicker] = useState(false);
-  const [scriptAnalysis, setScriptAnalysis] = useState<Array<{ label: string; type: string; appearance: string; personality: string; linkedSubjectId?: string; _pickerOpen?: boolean }>>([]);
+  const [scriptAnalysis, setScriptAnalysis] = useState<AnalysisItem[]>([]);
   const [analyzingScript, setAnalyzingScript] = useState(false);
   const [scriptAnalysisError, setScriptAnalysisError] = useState('');
   const [analysisCollapsed, setAnalysisCollapsed] = useState(false);
@@ -1153,36 +1282,123 @@ export default function VoiceoverPage() {
 
   // 角色/素材上下文。两条分镜链路共用同一份 @图片N 编号 —— 各算各的迟早漂移，
   // 编号一错，提示词里的角色锚定就指到别的图上去了。
-  const subjectContext = useMemo(() => {
-    const readyImages = mediaItems.filter(m => m.url && !m.uploading && m.mediaType === 'image');
-    const withImage    = videoSubjects.filter(s => s.image_url);
-    const withoutImage = videoSubjects.filter(s => !s.image_url);
-    const nameOf = (s: ProjectSubject) =>
-      scriptAnalysis.find(a => a.linkedSubjectId === s.id)?.label || s.label;
-    const descOf = (s: ProjectSubject) => {
-      const a = scriptAnalysis.find(x => x.linkedSubjectId === s.id);
-      return a ? `${a.appearance}；${a.personality}` : (s.description || '');
-    };
-    const characterLines = [
-      ...withImage.map((s, i) => `角色「${nameOf(s)}」绑定@图片${i + 1}，外貌描述：${s.description || '见图片'}`),
-      ...withoutImage.map(s => `角色「${nameOf(s)}」，外貌描述：${s.description || '未提供'}`),
-    ];
-    // 素材编号按类型各排各的 —— content 里图片/视频/音频是分开计数的，
-    // Seedance 提示词里用 图片N / 视频N / 音频N 指代第 N 个该类型素材。
-    const readyVideos = mediaItems.filter(m => m.url && !m.uploading && m.mediaType === 'video');
-    const readyAudios = mediaItems.filter(m => m.url && !m.uploading && m.mediaType === 'audio');
-    const descLines = [
-      ...withImage.map((s, i) => `图片${i + 1}：角色「${nameOf(s)}」— ${descOf(s) || '见图片'}`),
-      ...readyImages.map((m, i) => `图片${withImage.length + i + 1}：参考素材「${m.name || '素材'}」— ${m.description || ''}`),
-      ...readyVideos.map((m, i) => `视频${i + 1}：参考视频「${m.name || '素材'}」— ${m.description || ''}`),
-      ...readyAudios.map((m, i) => `音频${i + 1}：参考音频「${m.name || '素材'}」— ${m.description || ''}`),
-    ];
-    return {
-      characterDefs:     characterLines.join('\n'),
-      imageDescriptions: descLines.join('\n'),
-      subjectsWithImage: withImage,   // 1-based 编号 → 角色，供 image_refs 反查
-    };
-  }, [videoSubjects, mediaItems, scriptAnalysis]);
+  const subjectContext = useMemo(
+    () => buildSubjectContext(videoSubjects, mediaItems, scriptAnalysis),
+    [videoSubjects, mediaItems, scriptAnalysis]);
+
+  // 方舟体验中心的预设音色（80 条）。文件托管在火山的公开 TOS 上，选中直接把地址
+  // 塞进参考素材 —— 不用下载转存，编号照常按参考素材的顺序排。
+  const [voiceQuery, setVoiceQuery] = useState('');
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [voicePresets, setVoicePresets] = useState<Array<{ name: string; category: string; gender: string; duration: string; url: string; avatar: string }>>([]);
+  const [videoPresets, setVideoPresets] = useState<Array<{ name: string; category: string; url: string; thumb: string }>>([]);
+  const [imagePresets, setImagePresets] = useState<Array<{ name: string; category: string; url: string; thumb: string }>>([]);
+  useEffect(() => {
+    api.get<{ audios: typeof voicePresets; videos: typeof videoPresets; images: typeof imagePresets }>('/library/materials')
+      .then(d => { setVoicePresets(d.audios || []); setVideoPresets(d.videos || []); setImagePresets(d.images || []); })
+      .catch(() => {});
+  }, []);
+  // url → 缩略图：音色是 base64 头像，视频/图片是火山那边带 x-tos-process 的缩略图。
+  // 不落库（data URI 太大），每次按 url 现查现用。
+  const presetThumbByUrl = useMemo(() => {
+    const m = new Map<string, string>();
+    voicePresets.forEach(v => v.avatar && m.set(v.url, v.avatar));
+    videoPresets.forEach(v => v.thumb && m.set(v.url, v.thumb));
+    imagePresets.forEach(v => v.thumb && m.set(v.url, v.thumb));
+    return m;
+  }, [voicePresets, videoPresets, imagePresets]);
+
+  // 参考素材列表用的副本：非图片素材的缩略图在这里解析。
+  // 原来重开页面时所有素材的 previewUrl 都被设成了 url，等于把 mp3 塞进 <img> —— 裂图。
+  const mediaItemsForPanel = useMemo(() => mediaItems.map(m => {
+    if (m.mediaType === 'image') return m;                       // 图片自己就是缩略图
+    const thumb = presetThumbByUrl.get(m.url || '')
+      || (m.mediaType === 'video' && m.url?.includes('tos-cn-beijing')
+        ? `${m.url}?x-tos-process=video/snapshot,t_0,h_600` : '');
+    return { ...m, previewUrl: thumb || undefined };             // 没缩略图就退回图标
+  }), [mediaItems, presetThumbByUrl]);
+
+  // 素材库浮窗（参考素材那一栏的「素材库」按钮）
+  const [libOpen, setLibOpen] = useState(false);
+  const [libTab, setLibTab] = useState<'video' | 'audio' | 'image'>('video');
+  const [libQuery, setLibQuery] = useState('');
+
+  // 已上传好的参考音频 —— 顺序就是提示词里 @音频N 的编号（全片不可重排）
+  const audioItems = useMemo(
+    () => mediaItems.filter(m => m.url && !m.uploading && m.mediaType === 'audio'),
+    [mediaItems]
+  );
+  // 角色 → 音频编号的绑定，一行一个。后端拿它盖掉模型自己挑的 audio_ref，
+  // 该角色说话的每一镜都贴同一句「使用@音频N…的音色说话」
+  // 预设素材入列参考素材。地址是火山公开 TOS 的直链，不下载不转存 ——
+  // 编号仍按参考素材里同类型的顺序排（@视频N / @音频N / @图片N）。
+  function addPresetMedia(mediaType: 'image' | 'video' | 'audio', preset: { name: string; category?: string; url: string }) {
+    setMediaItems(prev => {
+      if (prev.some(m => m.url === preset.url)) return prev;      // 同一条只占一个编号
+      if (prev.filter(m => m.mediaType === mediaType).length >= MEDIA_LIMITS[mediaType]) {
+        setUploadError(`${MEDIA_ZH[mediaType]}最多 ${MEDIA_LIMITS[mediaType]} 个，先删掉一个再选`);
+        return prev;
+      }
+      return [...prev, {
+        uid: `preset-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        mediaType,
+        url: preset.url,
+        name: preset.name,
+        // 说明会拼进提示词的素材清单，模型靠它知道这条素材是干什么的
+        description: `预设素材：${preset.category ? preset.category + '·' : ''}${preset.name}`,
+      }];
+    });
+  }
+
+  // 让音频编号跟着角色编号走：@图片1 的角色，音色就排成 @音频1。
+  // 参考素材里可能还有环境音之类不属于任何角色的音频，那些排在角色音色之后。
+  // 一一对应只在「每个角色都选了音色」时成立 —— 对不上也没关系，提示词里逐条写明了谁用哪条。
+  useEffect(() => {
+    setMediaItems(prev => {
+      const audios = prev.filter(m => m.mediaType === 'audio');
+      if (audios.length < 2) return prev;
+      const ordered = [...videoSubjects.filter(s => s.image_url), ...videoSubjects.filter(s => !s.image_url)];
+      const wanted: string[] = [];
+      ordered.forEach(sub => {
+        const url = scriptAnalysis.find(a => a.linkedSubjectId === sub.id)?.linkedAudioUrl;
+        if (url && !wanted.includes(url)) wanted.push(url);
+      });
+      if (wanted.length === 0) return prev;
+      const rank = (m: MediaItem) => {
+        const i = wanted.indexOf(m.url || '');
+        return i >= 0 ? i : wanted.length + audios.indexOf(m);
+      };
+      const sorted = [...audios].sort((a, b) => rank(a) - rank(b));
+      if (sorted.every((m, i) => m === audios[i])) return prev;   // 顺序没变就别动 state
+      let k = 0;
+      return prev.map(m => m.mediaType === 'audio' ? sorted[k++] : m);
+    });
+  }, [scriptAnalysis, videoSubjects]);
+
+  // 选一条预设音色给角色：它得先成为参考素材才有 @音频N 的编号，所以先入列再绑定。
+  // 同一条音色多个角色共用时只入列一次（编号也就只占一个位）。
+  // 一条预设音频还有没有别人在用；没有就该撤出参考素材（自己上传的不算，那是用户主动传的）
+  function releasePresetAudio(url: string | undefined, analysis: typeof scriptAnalysis) {
+    if (!url || analysis.some(a => a.linkedAudioUrl === url)) return;
+    const item = mediaItems.find(m => m.url === url);
+    if (item && (item.uid?.startsWith('preset-') || (item.description || '').startsWith('预设素材：'))) {
+      setMediaItems(prev => prev.filter(m => m.url !== url));
+    }
+  }
+
+  function pickVoicePreset(idx: number, preset: { name: string; url: string }) {
+    setMediaItems(prev => prev.some(m => m.url === preset.url) ? prev : [...prev, {
+      uid: `preset-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      mediaType: 'audio' as const,
+      url: preset.url,
+      name: preset.name,
+      description: `预设音色：${preset.name}`,   // 模型漏写 voice_zh 时后端拿它兜底
+    }]);
+    const prevUrl = scriptAnalysis[idx]?.linkedAudioUrl;
+    const next = scriptAnalysis.map((s, i) => i === idx ? { ...s, linkedAudioUrl: preset.url, _voicePickerOpen: false } : s);
+    setScriptAnalysis(next);
+    if (prevUrl && prevUrl !== preset.url) releasePresetAudio(prevUrl, next);   // 换掉的那条别占编号
+  }
 
   const [dirtyShotIdxs, setDirtyShotIdxs] = useState<Set<number>>(new Set());
   const [videoDirty, setVideoDirty] = useState(false);
@@ -1452,7 +1668,7 @@ export default function VoiceoverPage() {
       if (videoDirty) {
         Object.assign(payload, { script, subtitle_input: subtitleInput, style, ratio, voice });
       }
-      payload.params = { model, resolution, generateAudio, watermark, seed, serviceTier, returnLastFrame, draft, webSearch, videoType, subtitleStyle, banner, bannerStyle, scriptAnalysis: scriptAnalysis.map(s => ({ label: s.label, type: s.type, appearance: s.appearance, personality: s.personality, linkedSubjectId: s.linkedSubjectId })) };
+      payload.params = { model, resolution, generateAudio, watermark, seed, serviceTier, returnLastFrame, draft, webSearch, videoType, subtitleStyle, banner, bannerStyle, scriptAnalysis: scriptAnalysis.map(s => ({ label: s.label, type: s.type, appearance: s.appearance, personality: s.personality, linkedSubjectId: s.linkedSubjectId, linkedAudioUrl: s.linkedAudioUrl })) };
       payload.subject_ids = videoSubjects.map(s => s.id);
       payload.media_items = mediaItems.map(m => ({ media_type: m.mediaType, url: m.url, name: m.name, description: m.description }));
       promises.push(api.put(`/videos/${videoId}`, payload).catch(() => {}));
@@ -1606,7 +1822,24 @@ export default function VoiceoverPage() {
   }
 
   function removeMediaItem(idx: number) {
+    const removed = mediaItems[idx];
     setMediaItems(prev => { const item = prev[idx]; if (item.previewUrl) URL.revokeObjectURL(item.previewUrl); return prev.filter((_, i) => i !== idx); });
+    // 素材没了，绑它的角色也得松手 —— 留着的话 voiceBindings 会指向一个不存在的编号
+    if (removed?.mediaType === 'audio' && removed.url) {
+      setScriptAnalysis(prev => prev.some(a => a.linkedAudioUrl === removed.url)
+        ? prev.map(a => a.linkedAudioUrl === removed.url ? { ...a, linkedAudioUrl: undefined } : a)
+        : prev);
+    }
+  }
+
+  // 角色卡上解绑音色。预设音色是「选音色」时替它入列的，没别的角色再用就一并撤出参考素材 ——
+  // 留着会白占一个 @音频N 编号，还会被当成参考素材发给 Seedance。
+  // 自己上传的音频不动：那是用户主动传的，可能另有用处（环境音之类）。
+  function unbindVoice(idx: number) {
+    const url = scriptAnalysis[idx]?.linkedAudioUrl;
+    const next = scriptAnalysis.map((a, i) => i === idx ? { ...a, linkedAudioUrl: undefined } : a);
+    setScriptAnalysis(next);
+    releasePresetAudio(url, next);
   }
 
   function handleReset() {
@@ -1680,14 +1913,54 @@ export default function VoiceoverPage() {
     pollRefs.current = {};
 
     try {
-      const readyMedia = mediaItems.filter(m => m.url && !m.uploading);
+      // 没人工绑音色的角色，这里按性别年龄从预设库挑一条钉死 —— 同一个角色全片同一把嗓子，
+      // 靠的是「一条固定的参考音频」，不是让模型每镜自己写英文音色描述。
+      // 上限内挑不完就只配前几个（音频最多 MEDIA_LIMITS.audio 条），其余退回音色描述。
+      let nextAnalysis = scriptAnalysis;
+      let nextMedia = mediaItems;
+      if (voicePresets.length > 0 && scriptAnalysis.some(a => !a.linkedAudioUrl)) {
+        const taken = new Set(scriptAnalysis.map(a => a.linkedAudioUrl).filter(Boolean) as string[]);
+        let audioSlots = MEDIA_LIMITS.audio - nextMedia.filter(m => m.mediaType === 'audio').length;
+        const added: MediaItem[] = [];
+        nextAnalysis = scriptAnalysis.map((a, i) => {
+          if (a.linkedAudioUrl || audioSlots <= 0) return a;
+          const v = pickPresetVoice(a, voicePresets, taken, i);
+          if (!v) return a;
+          taken.add(v.url); audioSlots--;
+          added.push({
+            uid: `preset-${Date.now()}-${i}`,
+            mediaType: 'audio',
+            url: v.url,
+            name: v.name,
+            description: `预设音色：${v.name}`,
+          });
+          return { ...a, linkedAudioUrl: v.url };
+        });
+        if (added.length > 0) {
+          nextMedia = [...mediaItems, ...added];
+          setMediaItems(nextMedia);
+          setScriptAnalysis(nextAnalysis);
+        }
+      }
+
+      const readyMedia = nextMedia.filter(m => m.url && !m.uploading);
       const subjectImagesCount = videoSubjects.filter(s => s.image_url).length;
       const imageCount = readyMedia.filter(m => m.mediaType === 'image').length + subjectImagesCount;
       const videoCount = readyMedia.filter(m => m.mediaType === 'video').length;
       const audioCount = readyMedia.filter(m => m.mediaType === 'audio').length;
-      // 与「专业分镜生成」共用同一份角色/素材编号（见 subjectContext）
-      const finalSubjectDefs = subjectContext.characterDefs;
-      const imageDescriptions = subjectContext.imageDescriptions || undefined;
+      // 与「专业分镜生成」共用同一份角色/素材编号（见 subjectContext）——
+      // 用刚算好的那份，state 这会儿还没落地
+      const ctx = buildSubjectContext(videoSubjects, nextMedia, nextAnalysis);
+      const finalSubjectDefs = ctx.characterDefs;
+      const imageDescriptions = ctx.imageDescriptions || undefined;
+      const readyAudioList = readyMedia.filter(m => m.mediaType === 'audio');
+      const finalVoiceBindings = nextAnalysis
+        .map(a => {
+          const n = a.linkedAudioUrl ? readyAudioList.findIndex(m => m.url === a.linkedAudioUrl) : -1;
+          return n >= 0 ? `角色「${a.label}」使用@音频${n + 1}` : '';
+        })
+        .filter(Boolean)
+        .join('\n');
 
       const jobId = await startStoryboardJob({
         concept: conceptText.trim(),
@@ -1703,6 +1976,7 @@ export default function VoiceoverPage() {
         style,                              // 视觉风格，不发过去模型会跟着参考图漂
         subject_definitions: finalSubjectDefs,
         image_descriptions:  imageDescriptions || '',
+        voice_bindings:      finalVoiceBindings || undefined,   // 人工绑的 + 刚自动配的
       });
       await pollStoryboardJob(jobId);
     } catch (err) {
@@ -1985,8 +2259,14 @@ export default function VoiceoverPage() {
         .forEach((m, i) => descLines.push(`音频${i + 1}：参考音频「${m.name || '素材'}」— ${m.description || ''}`));
       const imageDescriptions = descLines.length > 0 ? descLines.join('\n') : undefined;
 
-      const res = await api.post<{ taskId: string; status: string }>('/video/generate', {
+      const res = await api.post<{ taskId: string; status: string; prompt?: string }>('/video/generate', {
         prompt: shot.prompt, orderedMedia, imageDescriptions,
+        // 角色原文：后端提交前把这一镜的定义句统一换成它（原文锁上线前生成的分镜、
+        // 手动改过的 prompt 都只经过这条路，不在这里锁就还是一镜一个样）
+        subject_definitions: subjectContext.characterDefs || undefined,
+        // 字幕是准的那一份：后端据它把 prompt 末尾的台词块对齐（改过字幕的分镜才会动）
+        subtitle: shot.subtitle || undefined,
+        roll_type: shot.roll_type || undefined,
         model, resolution, ratio, duration: shot.duration || 8,
         generateAudio, watermark, webSearch,
         seed: sharedSeed,
@@ -1997,9 +2277,13 @@ export default function VoiceoverPage() {
       });
       const { taskId, status } = res;
       setTasks(prev => ({ ...prev, [idx]: { shotIndex: idx, taskId, status, videoUrl: null, localUrl: null, duration: null, error: null, submitting: false } }));
+      // 定义句被原文锁改写过就回写这一镜 —— 否则页面上显示的还是旧文本，
+      // 看起来像没生效，重开也还是旧的
+      const locked = res.prompt && res.prompt !== shot.prompt ? res.prompt : null;
+      if (locked) setShots(prev => prev.map((sh, i) => i === idx ? { ...sh, prompt: locked } : sh));
       // Persist task_id to shot in DB
       if (shot.id) {
-        api.put(`/shots/${shot.id}`, { task_id: taskId, task_status: status }).catch(() => {});
+        api.put(`/shots/${shot.id}`, { task_id: taskId, task_status: status, ...(locked ? { prompt: locked } : {}) }).catch(() => {});
       }
       const interval = setInterval(() => pollTaskById(idx, taskId), 10_000);
       pollRefs.current[idx] = interval;
@@ -2357,12 +2641,83 @@ export default function VoiceoverPage() {
                                   </span>
                                 ) : null;
                               })()}
+                              {item.linkedAudioUrl && (() => {
+                                const an = audioItems.findIndex(m => m.url === item.linkedAudioUrl);
+                                if (an < 0) return null;                       // 音频被删掉了，标签也不显示
+                                const media = audioItems[an];
+                                const avatar = presetThumbByUrl.get(item.linkedAudioUrl);
+                                return (
+                                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#0e7490', background: '#ecfeff', padding: '2px 6px', borderRadius: 4 }}>
+                                    {avatar
+                                      ? <img src={avatar} alt="" style={{ width: 28, height: 28, borderRadius: '50%', objectFit: 'cover' }} />
+                                      : <span style={{ width: 28, height: 28, borderRadius: '50%', background: '#cffafe', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13 }}>🎵</span>}
+                                    <span>音频{an + 1}</span>
+                                    <button type="button" title="试听"
+                                      onClick={() => { previewAudioRef.current?.pause(); const a = new Audio(media.url!); previewAudioRef.current = a; a.play().catch(() => {}); }}
+                                      style={{ background: 'none', border: 'none', color: '#0891b2', cursor: 'pointer', fontSize: 12, padding: 0, lineHeight: 1 }}>▶</button>
+                                    <button type="button" onClick={() => unbindVoice(idx)}
+                                      style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: 12, padding: 0, lineHeight: 1 }}>×</button>
+                                  </span>
+                                );
+                              })()}
                               <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                                {/* 音色绑定：从已上传的参考音频里挑一条，@音频N 的编号 = 上传顺序。
+                                    绑了之后后端逐镜贴同一句「使用@音频N…的音色说话」，
+                                    不再让模型自己猜哪条音频是谁的声音 */}
+                                {(audioItems.length > 0 || voicePresets.length > 0) && (
+                                  <span style={{ position: 'relative' }}>
+                                    <button type="button" onClick={() => setScriptAnalysis(prev => prev.map((s, i) => i === idx ? { ...s, _voicePickerOpen: !s._voicePickerOpen } : { ...s, _voicePickerOpen: false }))}
+                                      style={{ fontSize: 11, padding: '3px 8px', border: '1px solid #0891b2', borderRadius: 4, background: item.linkedAudioUrl ? '#ecfeff' : '#fff', color: '#0891b2', cursor: 'pointer' }}>
+                                      换音色
+                                    </button>
+                                    {item._voicePickerOpen && (
+                                      <div style={{ position: 'absolute', right: 0, top: '100%', marginTop: 4, padding: 8, border: '1px solid #e5e7eb', borderRadius: 6, background: '#fff', zIndex: 50, boxShadow: '0 4px 12px rgba(0,0,0,0.1)', minWidth: 180 }}>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                          {audioItems.map((m, ai) => (
+                                            <div key={m.uid} onClick={() => setScriptAnalysis(prev => prev.map((s, i) => i === idx ? { ...s, linkedAudioUrl: m.url, _voicePickerOpen: false } : s))}
+                                              style={{ padding: '5px 8px', borderRadius: 4, cursor: 'pointer', fontSize: 12, background: item.linkedAudioUrl === m.url ? '#ecfeff' : '#f9fafb', border: item.linkedAudioUrl === m.url ? '1px solid #0891b2' : '1px solid transparent' }}>
+                                              音频{ai + 1}：{m.name || '参考音频'}
+                                            </div>
+                                          ))}
+                                        </div>
+                                        {/* 方舟预设音色：选中先入列参考素材（拿到 @音频N 编号）再绑给这个角色 */}
+                                        {voicePresets.length > 0 && (
+                                          <div style={{ marginTop: 8, borderTop: '1px solid #f1f5f9', paddingTop: 8 }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                                              <span style={{ fontSize: 11, color: '#6b7280', whiteSpace: 'nowrap' }}>预设音色 {voicePresets.length}</span>
+                                              <input value={voiceQuery} onChange={e => setVoiceQuery(e.target.value)} placeholder="搜索 / 青年 女 …"
+                                                style={{ flex: 1, fontSize: 11, padding: '3px 6px', border: '1px solid #e5e7eb', borderRadius: 4 }} />
+                                            </div>
+                                            <div style={{ maxHeight: 220, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
+                                              {voicePresets
+                                                .filter(v => !voiceQuery.trim() || voiceQuery.trim().split(/\s+/).every(q => v.name.includes(q)))
+                                                .map(v => (
+                                                  <div key={v.url} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 6px', borderRadius: 4, fontSize: 12, background: item.linkedAudioUrl === v.url ? '#ecfeff' : '#f9fafb', border: item.linkedAudioUrl === v.url ? '1px solid #0891b2' : '1px solid transparent' }}>
+                                                    {v.avatar && <img src={v.avatar} alt="" style={{ width: 22, height: 22, borderRadius: '50%', objectFit: 'cover' }} />}
+                                                    <span onClick={() => pickVoicePreset(idx, v)} style={{ flex: 1, cursor: 'pointer' }}>{v.name}</span>
+                                                    <span style={{ fontSize: 10, color: '#9ca3af' }}>{v.duration}</span>
+                                                    <button type="button" onClick={() => { previewAudioRef.current?.pause(); const a = new Audio(v.url); previewAudioRef.current = a; a.play().catch(() => {}); }}
+                                                      style={{ fontSize: 10, padding: '1px 5px', border: '1px solid #cbd5e1', borderRadius: 3, background: '#fff', color: '#475569', cursor: 'pointer' }}>试听</button>
+                                                  </div>
+                                                ))}
+                                            </div>
+                                          </div>
+                                        )}
+                                        {item.linkedAudioUrl && (
+                                          <button type="button" onClick={() => { unbindVoice(idx); setScriptAnalysis(prev => prev.map((s, i) => i === idx ? { ...s, _voicePickerOpen: false } : s)); }}
+                                            style={{ marginTop: 6, fontSize: 11, color: '#dc2626', background: 'none', border: 'none', cursor: 'pointer' }}>清除音色</button>
+                                        )}
+                                        <button type="button" onClick={() => setScriptAnalysis(prev => prev.map((s, i) => i === idx ? { ...s, _voicePickerOpen: false } : s))}
+                                          style={{ marginTop: 6, marginLeft: 8, fontSize: 11, color: '#6b7280', background: 'none', border: 'none', cursor: 'pointer' }}>关闭</button>
+                                      </div>
+                                    )}
+                                  </span>
+                                )}
                                 {projectSubjects.length > 0 && (
                                   <span style={{ position: 'relative' }}>
                                     <button type="button" onClick={() => setScriptAnalysis(prev => prev.map((s, i) => i === idx ? { ...s, _pickerOpen: !s._pickerOpen } : { ...s, _pickerOpen: false }))}
                                       style={{ fontSize: 11, padding: '3px 8px', border: '1px solid #7c3aed', borderRadius: 4, background: '#fff', color: '#7c3aed', cursor: 'pointer' }}>
-                                      {item.linkedSubjectId ? '换头像' : '选择头像'}
+                                      换头像
                                     </button>
                                     {item._pickerOpen && (
                                       <div style={{ position: 'absolute', right: 0, top: '100%', marginTop: 4, padding: 8, border: '1px solid #e5e7eb', borderRadius: 6, background: '#fff', zIndex: 50, boxShadow: '0 4px 12px rgba(0,0,0,0.1)', minWidth: 160 }}>
@@ -2382,9 +2737,11 @@ export default function VoiceoverPage() {
                                   </span>
                                 )}
                                 <button type="button" onClick={() => {
+                                  const droppedAudio = scriptAnalysis[idx]?.linkedAudioUrl;
                                   const newA = scriptAnalysis.filter((_, i) => i !== idx);
                                   setScriptAnalysis(newA);
                                   setVideoSubjects(newA.filter(a => a.linkedSubjectId).map(a => projectSubjects.find(ps => ps.id === a.linkedSubjectId)).filter(Boolean) as ProjectSubject[]);
+                                  releasePresetAudio(droppedAudio, newA);       // 角色没了，它的预设音色也别留着占编号
                                 }}
                                   style={{ background: 'none', border: '1px solid #dc2626', borderRadius: 4, color: '#dc2626', cursor: 'pointer', fontSize: 11, padding: '3px 8px' }}>删除</button>
                               </span>
@@ -2415,19 +2772,27 @@ export default function VoiceoverPage() {
                         </div>
                       )}
                     </span>
-                    <span onClick={e => e.stopPropagation()}>
+                    </>)}
+                  </p>
+                  {/* 两个入口单独占一行 —— 标题行挤三样东西，窄屏会换行错位 */}
+                  {!mediaCollapsed && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+                      {/* 方舟预设素材：80 音色 / 35 段动作·运镜视频 / 71 张服饰环境画风角色图 */}
+                      <button type="button" onClick={() => setLibOpen(true)}
+                        style={{ fontSize: 13, padding: '4px 10px', border: '1px solid #0891b2', borderRadius: 5, background: '#fff', cursor: 'pointer', color: '#0891b2' }}>
+                        素材库
+                      </button>
                       <button type="button" onClick={() => mediaInputRef.current?.click()}
-                        style={{ fontSize: 13, padding: '4px 8px', border: '1px solid #6b7280', borderRadius: 5, background: '#fff', cursor: 'pointer', color: '#374151' }}>
+                        style={{ fontSize: 13, padding: '4px 10px', border: '1px solid #6b7280', borderRadius: 5, background: '#fff', cursor: 'pointer', color: '#374151' }}>
                         上传素材(图像|音频|视频)
                       </button>
                       <input ref={mediaInputRef} type="file" accept="image/*,video/*,audio/*" multiple style={{ display: 'none' }}
                         onChange={e => { addFiles(Array.from(e.target.files ?? [])); e.target.value = ''; }} />
-                    </span>
-                    </>)}
-                  </p>
+                    </div>
+                  )}
                   {!mediaCollapsed && (
                   <div style={{ padding: 10, border: '1px solid #e5e7eb', borderRadius: 8, background: '#f9fafb' }}>
-                    <MediaPanel items={mediaItems} onAddFiles={addFiles} onRemove={removeMediaItem} onDescChange={(idx, desc) => setMediaItems(prev => prev.map((m, i) => i === idx ? { ...m, description: desc } : m))} uploadError={uploadError} imageOffset={videoSubjects.filter(s => s.image_url).length} />
+                    <MediaPanel items={mediaItemsForPanel} onAddFiles={addFiles} onRemove={removeMediaItem} onDescChange={(idx, desc) => setMediaItems(prev => prev.map((m, i) => i === idx ? { ...m, description: desc } : m))} uploadError={uploadError} imageOffset={videoSubjects.filter(s => s.image_url).length} />
                   </div>
                   )}
 
@@ -2985,6 +3350,83 @@ export default function VoiceoverPage() {
             )}
           </div>
         </div>
+      )}
+
+      {/* 素材库浮窗：方舟体验中心的预设素材，点一下就进「参考素材」拿到 @视频N / @音频N / @图片N 编号。
+          经 createPortal 挂到 body —— 页面有 sticky 头部和 overflow 容器，挂在原处会被裁掉。 */}
+      {libOpen && typeof document !== 'undefined' && createPortal(
+        <div onClick={() => setLibOpen(false)} className={styles.libOverlay}>
+          <div onClick={e => e.stopPropagation()} className={styles.libSheet}>
+            <div className={styles.libHeader}>
+              <strong style={{ fontSize: 14 }} className={styles.libTitle}>素材库</strong>
+              <button type="button" onClick={() => setLibOpen(false)}
+                style={{ background: 'none', border: 'none', fontSize: 20, color: '#9ca3af', cursor: 'pointer', lineHeight: 1, padding: '0 4px' }}>×</button>
+              <span className={styles.libTabs}>
+                {([['video', `视频 ${videoPresets.length}`], ['audio', `音频 ${voicePresets.length}`], ['image', `图片 ${imagePresets.length}`]] as const).map(([k, label]) => (
+                  <button key={k} type="button" onClick={() => { setLibTab(k); setLibQuery(''); }}
+                    style={{ fontSize: 12, padding: '4px 12px', borderRadius: 999, cursor: 'pointer', whiteSpace: 'nowrap', border: libTab === k ? '1px solid #0891b2' : '1px solid #e5e7eb', background: libTab === k ? '#ecfeff' : '#fff', color: libTab === k ? '#0891b2' : '#6b7280' }}>
+                    {label}
+                  </button>
+                ))}
+              </span>
+              <input value={libQuery} onChange={e => setLibQuery(e.target.value)} placeholder="搜索（如 运镜 / 青年 女 / 旗袍）"
+                className={styles.libSearch} />
+            </div>
+
+            <div className={styles.libBody}>
+              {(() => {
+                const match = (name: string, category: string) => {
+                  const q = libQuery.trim();
+                  if (!q) return true;
+                  return q.split(/\s+/).every(w => name.includes(w) || category.includes(w));
+                };
+                const picked = (url: string) => mediaItems.some(m => m.url === url);
+
+                if (libTab === 'audio') {
+                  const list = voicePresets.filter(v => match(v.name, v.category));
+                  return (
+                    <div className={styles.libGridAudio}>
+                      {list.map(v => (
+                        <div key={v.url} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 7px', borderRadius: 6, fontSize: 12, background: picked(v.url) ? '#ecfeff' : '#f9fafb', border: picked(v.url) ? '1px solid #0891b2' : '1px solid transparent' }}>
+                          {v.avatar && <img src={v.avatar} alt="" style={{ width: 24, height: 24, borderRadius: '50%', objectFit: 'cover' }} />}
+                          <span onClick={() => addPresetMedia('audio', v)} style={{ flex: 1, cursor: 'pointer', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v.name}</span>
+                          <span style={{ fontSize: 10, color: '#9ca3af' }}>{v.duration}</span>
+                          <button type="button" onClick={() => { previewAudioRef.current?.pause(); const a = new Audio(v.url); previewAudioRef.current = a; a.play().catch(() => {}); }}
+                            style={{ fontSize: 11, padding: '4px 10px', border: '1px solid #cbd5e1', borderRadius: 4, background: '#fff', color: '#475569', cursor: 'pointer', flexShrink: 0 }}>试听</button>
+                        </div>
+                      ))}
+                      {list.length === 0 && <p style={{ fontSize: 12, color: '#9ca3af' }}>没有匹配的音色</p>}
+                    </div>
+                  );
+                }
+
+                const list = (libTab === 'video' ? videoPresets : imagePresets).filter(v => match(v.name, v.category));
+                return (
+                  <div className={styles.libGrid}>
+                    {list.map(v => (
+                      <div key={v.url} onClick={() => addPresetMedia(libTab, v)}
+                        style={{ cursor: 'pointer', borderRadius: 6, overflow: 'hidden', border: picked(v.url) ? '2px solid #0891b2' : '1px solid #e5e7eb', background: '#f9fafb' }}>
+                        <img src={v.thumb} alt={v.name} loading="lazy"
+                          style={{ width: '100%', aspectRatio: '3 / 4', objectFit: 'cover', display: 'block', background: '#e5e7eb' }} />
+                        <div style={{ padding: '4px 6px' }}>
+                          <div style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v.name}</div>
+                          <div style={{ fontSize: 10, color: '#9ca3af' }}>{v.category}{picked(v.url) ? ' · 已加入' : ''}</div>
+                        </div>
+                      </div>
+                    ))}
+                    {list.length === 0 && <p style={{ fontSize: 12, color: '#9ca3af' }}>没有匹配的素材</p>}
+                  </div>
+                );
+              })()}
+            </div>
+
+            <div className={styles.libFoot}>
+              点一下即加入「参考素材」，编号按加入顺序排（@视频N / @音频N / @图片N）。
+              上限：图 {MEDIA_LIMITS.image} / 视频 {MEDIA_LIMITS.video} / 音频 {MEDIA_LIMITS.audio}。
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );

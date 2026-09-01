@@ -20,6 +20,8 @@ const subjectRoutes   = require('./routes/subjects')
 const authRoutes      = require('./routes/auth')
 const libraryRoutes   = require('./routes/library')
 const promptRoutes    = require('./routes/prompt')
+const billingRoutes   = require('./routes/billing')
+const { webhookAliasRoutes } = require('./routes/billing')
 const { authMiddleware } = require('./middleware/auth')
 
 function buildApp(opts = {}) {
@@ -101,6 +103,9 @@ function buildApp(opts = {}) {
   app.register(subjectRoutes,   { prefix: '' })
   app.register(libraryRoutes,   { prefix: '/library' })
   app.register(promptRoutes,    { prefix: '/prompt' })
+  app.register(billingRoutes,   { prefix: '/billing' })
+  // Stripe 后台配的回调地址走 /webhooks/buy，不在 /billing 前缀下
+  app.register(webhookAliasRoutes, { prefix: '' })
 
   return app
 }

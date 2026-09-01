@@ -71,34 +71,58 @@ export default function TopNav() {
   }
 
   return (
-    <nav style={{
+    <nav className="topNav" style={{
       position: 'sticky',
       top: 0,
       zIndex: 100,
       background: '#1e293b',
       borderBottom: '1px solid #334155',
-      padding: '0 12px',
       display: 'flex',
       alignItems: 'center',
       height: 44,
-      gap: 4,
       overflow: 'visible',
     }}>
-      <Link href="/" style={{
-        fontSize: 15,
-        fontWeight: 700,
-        color: '#fff',
-        textDecoration: 'none',
-        marginRight: 12,
-        letterSpacing: 0.5,
-        flexShrink: 0,
-      }}>
-        Seedance
-      </Link>
-      <div style={{
+      <Link href="/" className="brandLogo" style={{
         display: 'flex',
         alignItems: 'center',
-        gap: 4,
+        color: '#fff',
+        textDecoration: 'none',
+        flexShrink: 0,
+      }}>
+        <span className="brandIcon" style={{
+          background: 'linear-gradient(135deg, #3b82f6, #4f46e5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexShrink: 0,
+          boxShadow: '0 1px 2px rgba(0,0,0,.25)',
+        }}>
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+               fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+               aria-hidden="true">
+            <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" />
+          </svg>
+        </span>
+        <span style={{ display: 'flex', flexDirection: 'column', lineHeight: 1 }}>
+          <span className="brandName" style={{ fontWeight: 900, letterSpacing: -0.2, color: '#fff' }}>
+            MACRODATA
+          </span>
+          <span className="brandSub" style={{
+            fontSize: 8,
+            fontWeight: 700,
+            color: '#94a3b8',
+            letterSpacing: 1,
+            textTransform: 'uppercase',
+            marginTop: 2,
+            whiteSpace: 'nowrap',
+          }}>
+            International (HK) Limited
+          </span>
+        </span>
+      </Link>
+      <div className="navLinks" style={{
+        display: 'flex',
+        alignItems: 'center',
         overflow: 'visible',
         flexShrink: 1,
         minWidth: 0,
@@ -106,11 +130,9 @@ export default function TopNav() {
       {NAV_ITEMS.map(item => {
         const active = pathname === item.href || pathname?.startsWith(item.href + '/');
         return (
-          <Link key={item.href} href={item.href} style={{
-            fontSize: 13,
+          <Link key={item.href} href={item.href} className="navLink" style={{
             color: active ? '#fff' : '#94a3b8',
             textDecoration: 'none',
-            padding: '6px 10px',
             borderRadius: 4,
             background: active ? '#334155' : 'transparent',
             fontWeight: active ? 500 : 400,
@@ -123,10 +145,8 @@ export default function TopNav() {
         );
       })}
       <div ref={assetRef} style={{ position: 'relative' }}>
-        <button onClick={() => setAssetOpen(v => !v)} style={{
-          fontSize: 13,
+        <button onClick={() => setAssetOpen(v => !v)} className="navLink" style={{
           color: pathname?.startsWith('/assets') ? '#fff' : '#94a3b8',
-          padding: '6px 10px',
           borderRadius: 4,
           background: pathname?.startsWith('/assets') ? '#334155' : 'transparent',
           fontWeight: pathname?.startsWith('/assets') ? 500 : 400,
@@ -251,6 +271,37 @@ export default function TopNav() {
           </div>
         )}
       </div>
+
+      <style jsx global>{`
+        .topNav { padding: 0 12px; gap: 4px; }
+        .topNav .brandLogo { gap: 7px; margin-right: 12px; }
+        .topNav .brandIcon { width: 26px; height: 26px; border-radius: 7px; }
+        .topNav .brandIcon svg { width: 16px; height: 16px; }
+        .topNav .brandName { font-size: 14px; }
+        .topNav .navLinks { gap: 4px; }
+        .topNav .navLink { font-size: 13px; padding: 6px 10px; }
+
+        @media (max-width: 768px) {
+          .topNav { padding: 0 10px; }
+          .topNav .brandSub { display: none; }
+          .topNav .brandLogo { gap: 5px; margin-right: 8px; }
+          .topNav .brandIcon { width: 22px; height: 22px; border-radius: 6px; }
+          .topNav .brandIcon svg { width: 14px; height: 14px; }
+          .topNav .brandName { font-size: 13px; }
+          .topNav .navLinks { gap: 3px; }
+          .topNav .navLink { font-size: 12.5px; padding: 5px 8px; }
+        }
+
+        @media (max-width: 380px) {
+          .topNav { padding: 0 6px; gap: 2px; }
+          .topNav .brandLogo { gap: 4px; margin-right: 5px; }
+          .topNav .brandIcon { width: 20px; height: 20px; }
+          .topNav .brandIcon svg { width: 13px; height: 13px; }
+          .topNav .brandName { font-size: 12px; }
+          .topNav .navLinks { gap: 2px; }
+          .topNav .navLink { font-size: 11.5px; padding: 4px 5px; }
+        }
+      `}</style>
     </nav>
   );
 }

@@ -490,6 +490,26 @@ async function voiceoverRoutes(fastify) {
     }
   })
 
+// 外貌描述里只留静态特征。提示词已经明写了不许带道具/动作/表情，但模型隔三差五还是会写
+// 「手边放着计算器和文件」「面带职业微笑」—— 这些每镜都在变，而这段文字会被角色定义原文锁
+// 逐镜一字不改地贴进 prompt_en，等于逼着模型每镜都摆同一个道具、挂同一个表情。
+// 按标点切句，命中这些词的整句丢掉；戴在身上的配饰（眼镜/手表/耳环）不算道具，留着。
+const PROP_CLAUSE = /手(里|中|边|上|持)|拿着|抱着|捧着|端着|提着|放着|摆着|桌[上前面]|身[旁边]|背后|背景|正在|坐在|站在|靠在|走[着向]|微笑|笑容|笑意|表情|神情|眼神|目光|皱眉|凝视|盯着/
+const WEARABLE   = /戴|穿|披|系|挂在(脖|胸|腰)/
+
+function keepStaticLooks(text) {
+  const clauses = String(text || '').split(/([，,；;。、])/)
+  let out = ''
+  for (let i = 0; i < clauses.length; i += 2) {
+    const seg = clauses[i]
+    const sep = clauses[i + 1] || ''
+    if (!seg || !seg.trim()) continue
+    if (PROP_CLAUSE.test(seg) && !WEARABLE.test(seg)) continue
+    out += (out ? '，' : '') + seg.trim()
+  }
+  return out || String(text || '').trim()   // 整段都被判成道具时宁可原样返回
+}
+
   fastify.post('/analyze-script', {
     schema: {
       body: {
@@ -514,7 +534,7 @@ async function voiceoverRoutes(fastify) {
 对每个角色，请给出：
 1. 名称（简短标识）
 2. 类型（真人/虚拟人物/动物）
-3. 外貌/形象描述（详细的视觉特征，适合AI生成图像时使用）
+3. 外貌/形象描述（只写**长在身上、穿在身上**的静态特征）
 4. 性格/特质描述
 
 请以JSON格式返回，格式如下：
@@ -523,7 +543,7 @@ async function voiceoverRoutes(fastify) {
     {
       "label": "角色名称",
       "type": "真人|虚拟人物|动物",
-      "appearance": "详细外貌/形象描述（50-100字，包含发型、衣着、体态、年龄等）",
+      "appearance": "外貌描述（40-80字，只含年龄段、性别、发型发色、五官、肤色、体型身高、衣着款式与颜色、随身穿戴的配饰）",
       "personality": "性格/特质描述（30-60字）"
     }
   ]
@@ -531,7 +551,13 @@ async function voiceoverRoutes(fastify) {
 
 注意：
 - 只提取角色（有生命的主体），不提取场景、道具、建筑
-- 外貌描述要具体，包含发型、衣着、体态、颜色、年龄等视觉细节
+- **外貌描述只写不随剧情变化的静态特征**：年龄段、性别、发型发色、五官、肤色、体型身高、
+  衣着款式与颜色、戴在身上的配饰（眼镜、手表、耳环这类）
+- **以下一律不许写进外貌**：手里/桌上的道具（手机、文件、计算器、咖啡杯…）、
+  正在做的动作与姿势、表情与眼神（微笑、皱眉…）、所处的场景与背景、光线与镜头。
+  这些每个镜头都会变，写进去会让人物形象逐镜漂移
+  ✗ 40岁职业人士，西装革履，面带职业微笑，手边放着计算器和文件
+  ✓ 40岁左右男性，短发梳得整齐，戴金丝边眼镜，深灰色西装配白衬衫，体态微胖
 - 如果剧本没有明确描述外貌，请根据角色定位合理推断
 - 直接输出JSON，不要加其他文字
 
@@ -559,7 +585,11 @@ ${script}`
       const jsonMatch = rawText.match(/\{[\s\S]*"subjects"\s*:\s*\[[\s\S]*\]\s*\}/)
       if (!jsonMatch) throw new Error('AI 返回格式异常')
       const parsed = JSON.parse(jsonMatch[0])
-      return { success: true, data: { subjects: parsed.subjects || [] } }
+      const subjects = (parsed.subjects || []).map(sub => ({
+        ...sub,
+        appearance: keepStaticLooks(sub.appearance),
+      }))
+      return { success: true, data: { subjects } }
     } catch (err) {
       return reply.code(500).send({ success: false, error: err.message })
     }

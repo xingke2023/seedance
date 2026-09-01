@@ -24,6 +24,57 @@ async function initDB() {
     )
   `)
 
+  // ---- Stripe 订阅 ----
+  // 一个用户一个 Stripe customer，复用它才能在 Billing Portal 里看到历史订单
+  await query(`
+    CREATE TABLE IF NOT EXISTS billing_customers (
+      user_id INT PRIMARY KEY REFERENCES users(id),
+      stripe_customer_id VARCHAR(64) UNIQUE NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `)
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS billing_subscriptions (
+      id SERIAL PRIMARY KEY,
+      user_id INT REFERENCES users(id) NOT NULL,
+      stripe_subscription_id VARCHAR(64) UNIQUE NOT NULL,
+      stripe_customer_id VARCHAR(64) NOT NULL,
+      stripe_price_id VARCHAR(64),
+      plan_key VARCHAR(32),
+      status VARCHAR(32),
+      current_period_end TIMESTAMPTZ,
+      cancel_at_period_end BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `)
+  await query(`CREATE INDEX IF NOT EXISTS idx_billing_subs_user ON billing_subscriptions(user_id)`)
+
+  // 每条 Stripe 事件只处理一次：主键就是去重锁。同时兼作到账流水
+  await query(`
+    CREATE TABLE IF NOT EXISTS billing_events (
+      stripe_event_id VARCHAR(64) PRIMARY KEY,
+      type VARCHAR(64),
+      user_id INT,
+      credits_granted INT DEFAULT 0,
+      amount INT,
+      currency VARCHAR(10),
+      source_id VARCHAR(64),
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `)
+  await query(`ALTER TABLE billing_events RENAME COLUMN invoice_id TO source_id`).catch(() => {})
+  await query(`ALTER TABLE billing_events ADD COLUMN IF NOT EXISTS source_id VARCHAR(64)`)
+  await query(`CREATE INDEX IF NOT EXISTS idx_billing_events_user ON billing_events(user_id, created_at DESC)`)
+  // 同一笔款只能入账一次。source_id 是发票 ID（订阅）或 Checkout Session ID（次数包）：
+  // invoice.paid 和 invoice.payment_succeeded 是两条不同事件、会为同一张发票各来一次；
+  // 次数包的 checkout.session.completed 和 async_payment_succeeded 同理。
+  // 事件 ID 去重拦不住这种，得按付款对象去重
+  await query(`DROP INDEX IF EXISTS idx_billing_events_invoice`)
+  await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_events_source
+                 ON billing_events(source_id) WHERE source_id IS NOT NULL`)
+
   await query(`
     CREATE TABLE IF NOT EXISTS projects (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

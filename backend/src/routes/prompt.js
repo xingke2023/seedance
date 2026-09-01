@@ -11,6 +11,7 @@ const {
   DIALOGUE_SYSTEM,
 } = require('../prompt/prompts')
 const { buildContext, buildCraft, selectSkills, describeSkills } = require('../prompt/skills')
+const { parseSubjectDefs, lockSubjectAnchors, harvestDefs } = require('../prompt/anchor')
 
 const str = v => String(v ?? '').trim()
 
@@ -27,27 +28,49 @@ const str = v => String(v ?? '').trim()
 //   没挂 → `Voice of X: <英文音色描述>`
 // 两者只取其一 —— 同时给两套音色说明会互相打架。台词行 `X says: “…”` 两种情况都不动。
 function appendSpeech(promptEn, lines, voices) {
-  const speakers = [...new Set(lines.map(l => l.speaker))]
-  const voiceLines = speakers
-    .map(sp => [sp, voices.get(sp)])
-    .filter(([, v]) => v && (v.voiceZh && v.audioRef || v.voiceEn))
-    .map(([sp, v]) => {
-      const who = lines.find(l => l.speaker === sp).speaker_en || sp
-      return v.audioRef && v.voiceZh
-        ? `${who} 使用@音频${v.audioRef}${v.voiceZh}的音色说话`
-        : `Voice of ${who}: ${v.voiceEn}`
-    })
-  const speech = lines.map((l, i) => {
+  const dialogue  = lines.filter(l => l.type !== 'narration')
+  const narration = lines.filter(l => l.type === 'narration')
+
+  // 音色行：每个说话人（含旁白）一句，全片一字不改
+  const voiceLine = sp => {
+    const v = voices.get(sp)
+    if (!v || (!v.audioRef && !v.voiceEn)) return ''
+    const who = lines.find(l => l.speaker === sp).speaker_en || sp
+    // 写法照官方规范：`使用 @音频1 低厚温润…的音色说`（编号两边留空格）
+    return v.audioRef
+      ? `${who} 使用 @音频${v.audioRef} ${v.voiceZh}的音色说话`
+      : `Voice of ${who}: ${v.voiceEn}`
+  }
+  const voiceLinesFor = ls => [...new Set(ls.map(l => l.speaker))].map(voiceLine).filter(Boolean)
+
+  const speechLines = ls => ls.map((l, i) => {
     const who  = l.speaker_en || l.speaker
     const verb = i === 0 ? 'says'
-      : lines[i - 1].speaker === l.speaker ? 'continues' : 'replies'
+      : ls[i - 1].speaker === l.speaker ? 'continues' : 'replies'
     return `${who} ${verb}: “${l.text}”`
   })
+
+  const blocks = []
   // 「spoken aloud only, never rendered as on-screen text」是踩坑后加的：
   // 提示词里带引号的台词会诱使模型把台词渲成画面里的字幕，和后期烧的那层重叠。
-  return `${str(promptEn)}\n\nDialogue (spoken aloud on camera, lip-synced; ` +
-    `spoken audio only, never rendered as on-screen text or subtitles):\n` +
-    [...voiceLines, ...speech].join('\n')
+  if (dialogue.length > 0) {
+    blocks.push(
+      'Dialogue (spoken aloud on camera, lip-synced; ' +
+      'spoken audio only, never rendered as on-screen text or subtitles):\n' +
+      [...voiceLinesFor(dialogue), ...speechLines(dialogue)].join('\n')
+    )
+  }
+  // 旁白也要出声：它原来只进字幕，画面里没人说、提示词里也没写，成片就是有字无声。
+  // 写成画外音块 —— 说话人不在画面里，所以不要求口型，也不要让谁对着镜头念。
+  if (narration.length > 0) {
+    blocks.push(
+      'Off-screen voiceover (narrator is NOT visible in frame, no lip sync, ' +
+      'no character in the shot speaks these words; spoken audio only, ' +
+      'never rendered as on-screen text or subtitles):\n' +
+      [...voiceLinesFor(narration), ...speechLines(narration)].join('\n')
+    )
+  }
+  return blocks.length > 0 ? `${str(promptEn)}\n\n${blocks.join('\n\n')}` : str(promptEn)
 }
 
 async function promptRoutes(fastify) {
@@ -169,6 +192,14 @@ async function promptRoutes(fastify) {
     const audioAssets = [...imageDescs.matchAll(/^\s*音频\s*(\d+)\s*[：:]\s*(.*)$/gm)]
       .map(m => ({ n: Number(m[1]), desc: str(m[2]) }))
       .filter(a => a.n > 0)
+    // 页面上「选音色」绑好的角色 → 音频编号（一行一个：角色「小李」使用@音频1）。
+    // 绑了就由我们说了算，不再采信模型自己挑的 audio_ref —— 挑错一个角色，
+    // 整条片子他都用别人的嗓子说话。
+    const voiceBindings = new Map(
+      [...str(b.voice_bindings).matchAll(/^\s*角色\s*[「『"']?(.*?)[」』"']?\s*使用\s*[<@]?\s*音频\s*(\d+)\s*>?\s*$/gm)]
+        .map(m => [str(m[1]), Number(m[2])])
+        .filter(([name, n]) => name && n > 0)
+    )
     if (subjectDefs || imageDescs) {
       parts.push('')
       parts.push('本视频已绑定以下角色/参考素材：')
@@ -179,7 +210,15 @@ async function promptRoutes(fastify) {
         '该类型素材（三种类型各自从 1 开始编号，与上面列出的编号一致）。' +
         '凡是画面中出现上述角色的镜头，prompt_en 必须以 @图片N 引用对应素材' +
         '（例如 The woman in @图片1 walks through …），保证多个镜头之间人物形象一致；' +
-        '参考视频用来对齐运镜或动作时写 @视频N，参考音频写 @音频N；未用到素材的空镜不必引用。'
+        '参考视频用来对齐运镜或动作时写 @视频N，参考音频写 @音频N；未用到素材的空镜不必引用。' +
+        (/音色\s*[<@]?\s*音频\s*\d+/.test(subjectDefs)
+          ? '上面每个角色都标了它的 @图片N（形象）和 音色@音频M（声音）—— 那是同一个人的两半，' +
+            '编号已按角色顺序排好；该角色开口说话的镜头，prompt_en 里形象引用 @图片N、' +
+            '音色引用 @音频M，两个都要写，不要张冠李戴。'
+          : '') +
+        '角色定义句一律写成「将@图片N中<上面那行外貌描述原文>定义为<主体N>；」并放在该镜画面描述之前：' +
+        '外貌描述**逐字照抄上面给的原文**，不要改写、增删或翻译，也不要再补写原文里没有的外貌细节；' +
+        '主体编号必须等于它绑定的图片编号（@图片2 的角色只能叫 <主体2>），全片每一镜都用同一套定义和标签。'
       )
     }
 
@@ -229,6 +268,18 @@ async function promptRoutes(fastify) {
         })
       }
 
+      // 角色定义原文锁：把模型逐镜自写的定义句换成页面传来的原文，标签编号归一到图片编号。
+      // 放在提 image_refs 之前 —— refs 要反映最终文本（归一可能改掉编号）。
+      // 页面没给原文的角色（主体没填描述、也没做过剧本分析），就从模型这一批分镜里
+      // 挑写得最全的那句当原文 —— 没有原文可依时，至少全片统一到同一句
+      const shotPrompts = (storyboard.shots || []).map(sh => sh.prompt_en)
+      const anchorDefs = harvestDefs(shotPrompts, parseSubjectDefs(subjectDefs))
+      if (anchorDefs.size > 0) {
+        for (const shot of storyboard.shots || []) {
+          shot.prompt_en = lockSubjectAnchors(shot.prompt_en, anchorDefs)
+        }
+      }
+
       // roll_type 兜底。解说纪录片全片没有 A-roll（无演员出镜说话），叙事短片模型
       // 漏写时也先按 b_roll 算 —— 补完对白后有台词的镜头会被改回 a_roll。
       // 放在补台词之前：第二步要靠它判断哪些镜头有人能开口。
@@ -259,6 +310,8 @@ async function promptRoutes(fastify) {
             .join('\n')
           // 角色定义一并给过去，speaker 才描述得出画面里真实存在的那个人
           // 挂了参考音频就让模型给每个角色挑一条并写中文音色描述；没挂则沿用 voice_en。
+          const bindingLines = [...voiceBindings.entries()]
+            .map(([name, n]) => `角色「${name}」使用@音频${n}`).join('\n')
           const voiceClone = audioAssets.length > 0
             ? '\n可用参考音频（用来锁音色）：\n' +
               audioAssets.map(a => `音频${a.n}：${a.desc || '（无说明）'}`).join('\n') +
@@ -268,7 +321,13 @@ async function promptRoutes(fastify) {
               '  voice_zh：中文音色特征描述，至少覆盖音高（低厚/清亮）、' +
               '质感（温润/沙哑/带颗粒感）、年龄性别（中年男声）三项，' +
               '连写成一个短语，例：低厚温润带细碎颗粒感中年男声\n' +
-              '同一条音频可以给多个角色，但音色差异大的角色不要共用一条。'
+              '同一条音频可以给多个角色，但音色差异大的角色不要共用一条。\n' +
+              '  subject_label：这个角色在「出场角色」里的名字（原样照抄），' +
+              '用来把音色和角色对上 —— 漏写的话页面上绑好的音色就落不到人头上\n' +
+              (bindingLines
+                ? '\n以下角色的音色**页面已经绑定，必须照用**（audio_ref 只能填这个编号）：\n' +
+                  bindingLines + '\n绑定的角色仍要写 voice_zh：照着那条音频的说明描述音色。\n'
+                : '')
             : ''
           const dialogueUser = [
             `视频概念：${concept}`,
@@ -288,19 +347,23 @@ async function promptRoutes(fastify) {
           // audio_ref 必须真的在这次的音频清单里 —— 模型编一个不存在的编号，
           // Seedance 那边就是个悬空引用，宁可退回 voice_en。
           const audioNums = new Set(audioAssets.map(a => a.n))
-          const voices = new Map(
-            (parsed.voices || [])
-              .map(v => {
-                const ref = Number(v.audio_ref)
-                const zh  = str(v.voice_zh)
-                return [str(v.speaker), {
-                  voiceEn:  str(v.voice_en),
-                  voiceZh:  zh,
-                  audioRef: audioNums.has(ref) && zh ? ref : 0,
-                }]
-              })
-              .filter(([sp, v]) => sp && (v.voiceEn || v.audioRef))
-          )
+          const audioDesc = new Map(audioAssets.map(a => [a.n, a.desc]))
+          const entries = (parsed.voices || []).map(v => {
+            // 页面绑定优先；模型漏写 subject_label 时才退回它自己挑的 audio_ref
+            const bound = voiceBindings.get(str(v.subject_label)) || 0
+            const own   = Number(v.audio_ref)
+            const ref   = bound || (audioNums.has(own) ? own : 0)
+            // 只给编号不描述音色会飘（官方约定）—— 模型漏写就拿页面给这条音频的说明兜底
+            const zh = str(v.voice_zh) || (ref ? str(audioDesc.get(ref)) : '')
+            return [str(v.speaker), { voiceEn: str(v.voice_en), voiceZh: zh, audioRef: ref }]
+          }).filter(([sp, v]) => sp && (v.voiceEn || v.audioRef))
+          // 只绑了一个角色、这条片子也只有一个人说话时，模型漏写 subject_label 也认
+          if (voiceBindings.size === 1 && entries.length === 1 && !entries[0][1].audioRef) {
+            const [, n] = [...voiceBindings.entries()][0]
+            entries[0][1].audioRef = n
+            entries[0][1].voiceZh = entries[0][1].voiceZh || str(audioDesc.get(n))
+          }
+          const voices = new Map(entries)
           const byNumber = new Map()
           ;(parsed.subtitles || []).forEach((x, i) => {
             // 老结构（单条 subtitle 字符串）也认，模型偶尔会退回去写
@@ -317,15 +380,36 @@ async function promptRoutes(fastify) {
               .filter(l => l.text)
             byNumber.set(Number(x.shot_number) || i + 1, lines)
           })
+          // speaker_en 归一（和角色定义原文锁同一个道理）：同一个人的英文指代必须全片一致。
+          // 模型逐句自由写的话，这镜是 the man in the navy shirt、下镜成了 the young
+          // office worker —— 每镜独立生成，Seedance 会当成两个人，配出两把嗓子。
+          // 取出现次数最多的那个写法（同频取更具体的长句），其余全部换成它。
+          const enTally = new Map()
+          for (const lines of byNumber.values()) {
+            for (const l of lines) {
+              if (!l.speaker_en) continue
+              const tally = enTally.get(l.speaker) || new Map()
+              tally.set(l.speaker_en, (tally.get(l.speaker_en) || 0) + 1)
+              enTally.set(l.speaker, tally)
+            }
+          }
+          const canonEn = new Map()
+          for (const [sp, tally] of enTally) {
+            const [best] = [...tally.entries()].sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)
+            if (best) canonEn.set(sp, best[0])
+          }
+          for (const lines of byNumber.values()) {
+            for (const l of lines) l.speaker_en = canonEn.get(l.speaker) || l.speaker_en
+          }
           storyboard.shots.forEach((sh, i) => {
             const lines = byNumber.get(Number(sh.shot_number)) || byNumber.get(i + 1) || []
             sh.dialogue = lines
             sh.subtitle = lines.map(l => l.text).join('')
-            const spoken = lines.filter(l => l.type === 'dialogue')
-            if (spoken.length > 0) {
-              // 有人在画面里说话，按定义就是 A-roll —— 第一步的判断以此为准修正
-              sh.roll_type = 'a_roll'
-              sh.prompt_en = appendSpeech(sh.prompt_en, spoken, voices)
+            if (lines.length > 0) {
+              // 对白和旁白都要进 prompt_en：字幕两类都会烧，声音也得两类都有。
+              // A-roll 只看有没有人在画面里开口 —— 画外旁白不改变镜头性质。
+              if (lines.some(l => l.type !== 'narration')) sh.roll_type = 'a_roll'
+              sh.prompt_en = appendSpeech(sh.prompt_en, lines, voices)
             }
           })
         } catch (e) {

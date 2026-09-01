@@ -2,6 +2,7 @@
 
 const { query } = require('../db')
 const guide = require('../prompt/guide')
+const materials = require('../lib/materials')
 
 // Preset/fragment tables are read-mostly reference data shared by all users.
 // Ranking is use_count desc so the presets people actually pick float up.
@@ -27,6 +28,17 @@ async function libraryRoutes(fastify) {
   // ═══ 提示词指南 ═══
 
   fastify.get('/guide', async () => ({ success: true, data: guide }))
+
+  // 方舟体验中心的预设素材（音色 / 服饰环境画风角色图 / 动作运镜视频）。
+  // 清单在仓库根的 materials/，文件本身托管在火山的公开 TOS 上，直接把地址交给
+  // Seedance 就行 —— 不必转存，也就不占我们的 /uploads。
+  // ?kind=audios|images|videos 只取一类；音色带 base64 头像，整包偏大
+  fastify.get('/materials', async (request) => {
+    const data = materials.load()
+    const kind = String(request.query?.kind || '').trim()
+    if (kind && data[kind]) return { success: true, data: { [kind]: data[kind], counts: data.counts } }
+    return { success: true, data }
+  })
 
   // ═══ 素材库 ═══
 

@@ -10,6 +10,8 @@ const store = require('../video/store')
 const { setProvider, getProvider } = store
 const { UPLOAD_ROOT } = require('../lib/uploads')
 const { query } = require('../db')
+const { parseSubjectDefs, lockSubjectAnchors } = require('../prompt/anchor')
+const { syncSpeechWithSubtitle } = require('../prompt/speech')
 
 const execFileAsync = promisify(execFile)
 const VIDEO_CACHE = path.join(UPLOAD_ROOT, '.video-cache')
@@ -149,6 +151,9 @@ async function videoRoutes(fastify) {
           audios:        { type: 'array', items: mediaItemSchema, maxItems: 4 },
           orderedMedia:  { type: 'array', items: { type: 'object', properties: { url: { type: 'string' }, mediaType: { type: 'string' } } }, maxItems: 16 },
           imageDescriptions: { type: 'string', maxLength: 3000 },
+          subject_definitions: { type: 'string', maxLength: 3000 },
+          subtitle:      { type: 'string', maxLength: 2000 },
+          roll_type:     { type: 'string' },
           model:         { type: 'string' },
           resolution:    { type: 'string', enum: ['480p', '720p', '1080p'] },
           ratio:         { type: 'string' },
@@ -171,6 +176,8 @@ async function videoRoutes(fastify) {
   }, async (request, reply) => {
     const {
       prompt, images = [], videos = [], audios = [], orderedMedia, imageDescriptions,
+      subject_definitions: subjectDefs,
+      subtitle, roll_type: rollType,
       model, resolution, ratio, duration,
       seed, generateAudio, watermark, webSearch,
       cameraFixed, returnLastFrame, draft, serviceTier, priority,
@@ -187,9 +194,38 @@ async function videoRoutes(fastify) {
       return reply.code(403).send({ success: false, error: '额度已用完' })
     }
 
+    // 角色定义原文锁的最后一道闸。分镜生成时已经锁过一次，但这里还要再锁：
+    // 存量分镜（锁上线之前生成的）和手动改过的 prompt 都只经过这一条路 ——
+    // 定义句在这里统一换成原文，同一个角色在每一镜才真的一字不差。
+    let finalPrompt = subjectDefs
+      ? lockSubjectAnchors(prompt, parseSubjectDefs(subjectDefs))
+      : prompt
+
+    // 台词块跟字幕对齐。字幕在页面上可以改，而结构化的 dialogue 没有落库 ——
+    // 不同步的话，画面里的人念的是旧词、烧上去的字幕是新词。音色行保留不动。
+    //
+    // 重建时若这一镜原来就没有音色行，按角色定义里的音色绑定补一句：
+    // `角色「小李」绑定@图片1、音色@音频1` → `<主体1> 使用 @音频1 …的音色说话`。
+    // 音色描述取素材说明里那条音频的说明（`音频1：角色「小李」的音色 — 预设音色：青年-男-…`）
+    // —— 官方约定：只给编号不描述音色会飘。
+    const audioDescs = new Map(
+      [...String(imageDescriptions || '').matchAll(/^\s*音频\s*(\d+)\s*[：:]\s*(.*)$/gm)]
+        .map(m => [Number(m[1]), String(m[2] || '').replace(/^.*?—\s*/, '').trim()])
+    )
+    const anchorMap = subjectDefs ? parseSubjectDefs(subjectDefs) : new Map()
+    finalPrompt = syncSpeechWithSubtitle(finalPrompt, subtitle, {
+      rollType,
+      voiceOf: (subjectNo, speaker) => {
+        const def = anchorMap.get(subjectNo)
+        if (!def?.audioRef) return ''
+        const zh = audioDescs.get(def.audioRef) || ''
+        return `${speaker} 使用 @音频${def.audioRef} ${zh}的音色说话`
+      },
+    })
+
     try {
       const result = await createVideoTask({
-        prompt, images, videos, audios, orderedMedia, imageDescriptions,
+        prompt: finalPrompt, images, videos, audios, orderedMedia, imageDescriptions,
         model: effectiveModel, resolution, ratio, duration,
         seed, generateAudio, watermark, webSearch,
         cameraFixed, returnLastFrame, draft, serviceTier, priority,
@@ -207,7 +243,9 @@ async function videoRoutes(fastify) {
 
       return {
         success: true,
-        data: { taskId, status, callbackUrl: callbackUrl || null },
+        // prompt 回传：定义句可能被原文锁改写过，页面拿它回写分镜，
+        // 免得列表里显示的还是旧文本、下次提交又要再锁一遍
+        data: { taskId, status, callbackUrl: callbackUrl || null, prompt: finalPrompt },
       }
     } catch (err) {
       fastify.log.error(err)
