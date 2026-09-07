@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
+import { haptic, hapticStrong } from '@/lib/haptics';
 import styles from './page.module.css';
 
 interface Project {
@@ -49,6 +50,7 @@ export default function ProjectsPage() {
 
   async function handleCreate() {
     if (!newName.trim()) return;
+    haptic();
     setCreating(true);
     try {
       const data = await api.post<Project>('/projects', { name: newName.trim() });
@@ -64,6 +66,7 @@ export default function ProjectsPage() {
 
   async function handleDelete(e: React.MouseEvent, id: string) {
     e.stopPropagation();
+    hapticStrong();
     if (!confirm('确定删除该项目？所有视频将一并删除。')) return;
     try {
       await api.del(`/projects/${id}`);
@@ -89,7 +92,7 @@ export default function ProjectsPage() {
               <h1 className={styles.title}>项目库</h1>
               <div className={styles.subtitle}>剧本 · 分镜 · AI 短视频一站式创作</div>
             </div>
-            <button className={styles.createBtn} disabled onClick={() => setShowCreate(true)}>
+            <button className={styles.createBtn} disabled onClick={() => { haptic(); setShowCreate(true); }}>
               + 新建
             </button>
           </div>
@@ -146,7 +149,7 @@ export default function ProjectsPage() {
         ) : (
           <div className={styles.grid}>
             {projects.map(project => (
-              <div key={project.id} className={styles.card} onClick={() => router.push(`/projects/${project.id}`)}>
+              <div key={project.id} className={styles.card} onClick={() => { haptic(); router.push(`/projects/${project.id}`); }}>
                 <div className={styles.thumb}>
                   {project.cover_url ? (
                     <img src={project.cover_url} alt="" />
@@ -190,7 +193,7 @@ export default function ProjectsPage() {
         </div>
       </div>
 
-      <button className={styles.fab} disabled onClick={() => setShowCreate(true)} title="新建项目">
+      <button className={styles.fab} disabled onClick={() => { haptic(); setShowCreate(true); }} title="新建项目">
         +
       </button>
     </div>

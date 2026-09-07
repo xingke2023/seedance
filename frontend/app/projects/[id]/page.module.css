@@ -1,11 +1,8 @@
 /* ── 手机 APP 样式：居中窄栏 + 渐变色块（与 /projects 同一套色） ── */
 
 .shell {
-  min-height: calc(100vh - var(--topnav-h, 52px));
-  background:
-    radial-gradient(900px 380px at 12% -8%, #dbeafe 0%, rgba(219,234,254,0) 62%),
-    radial-gradient(760px 340px at 92% 4%, #e0f2fe 0%, rgba(224,242,254,0) 60%),
-    #f5f8ff;
+  min-height: calc(100vh - var(--topnav-h, 60px));
+  background: var(--th-shell-bg);
   padding-bottom: 40px;
 }
 
@@ -21,8 +18,8 @@
   border-radius: 12px;
   padding: 14px 16px 12px;
   color: #fff;
-  background: linear-gradient(135deg, #2563eb 0%, #3b82f6 50%, #60a5fa 100%);
-  box-shadow: 0 6px 16px rgba(59,130,246,.24);
+  background: var(--th-hero-grad);
+  box-shadow: 0 6px 16px var(--th-hero-shadow);
 }
 .hero::after {
   content: '';
@@ -49,9 +46,9 @@
 
 .projTitle {
   font-size: 18px;
-  font-weight: 700;
+  font-weight: 500;
   margin: 0;
-  letter-spacing: -0.2px;
+  letter-spacing: 0.2px;
   line-height: 1.3;
 }
 
@@ -93,7 +90,7 @@
 .skeletonHero {
   height: 98px;
   border-radius: 12px;
-  background: linear-gradient(100deg, #dbeafe 30%, #bfdbfe 50%, #dbeafe 70%);
+  background: var(--th-skel-grad);
   background-size: 220% 100%;
   animation: shimmer 1.3s infinite linear;
   margin-bottom: 22px;
@@ -118,8 +115,8 @@
   font-size: 28px;
   line-height: 1;
   cursor: pointer;
-  background: linear-gradient(135deg, #2563eb, #38bdf8);
-  box-shadow: 0 10px 24px rgba(37,99,235,.42);
+  background: var(--th-fab-grad);
+  box-shadow: 0 10px 24px var(--th-fab-shadow);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -190,11 +187,11 @@
   outline: none;
   transition: border-color .15s, background .15s;
 }
-.createInput:focus { border-color: #3b82f6; background: #fff; }
+.createInput:focus { border-color: var(--th-focus); background: #fff; }
 
 .createConfirm {
   padding: 10px 16px;
-  background: linear-gradient(135deg, #2563eb, #3b82f6);
+  background: var(--th-btn-grad);
   color: #fff;
   border: none;
   border-radius: 8px;
@@ -226,19 +223,25 @@
 .videoCard {
   position: relative;
   display: flex;
-  align-items: flex-start;
+  /* 每张卡等高：有没有剧本摘要都一样，列表才是齐的 */
+  min-height: 108px;
+  box-sizing: border-box;
+  align-items: center;
   gap: 12px;
   padding: 12px;
   background: #fff;
   border-radius: 12px;
   cursor: pointer;
-  box-shadow: 0 3px 12px rgba(15,23,42,.06);
+  /* 卡片要从浅蓝底上「浮」起来：一道发丝描边定轮廓 + 贴边硬阴影 + 大范围柔光。
+     只靠阴影在浅色底上总是发虚，描边才是「实」的来源 */
+  border: 1px solid var(--th-border);
+  box-shadow: 0 1px 3px rgba(15,23,42,.13), 0 8px 20px rgba(15,23,42,.16);
   transition: transform .12s ease, box-shadow .18s ease;
   -webkit-tap-highlight-color: transparent;
 }
-.videoCard:active { transform: scale(.985); box-shadow: 0 2px 6px rgba(15,23,42,.08); }
+.videoCard:active { transform: scale(.985); box-shadow: 0 1px 3px rgba(15,23,42,.18); }
 @media (hover: hover) {
-  .videoCard:hover { box-shadow: 0 8px 22px rgba(15,23,42,.10); }
+  .videoCard:hover { border-color: var(--th-border-hover); box-shadow: 0 2px 5px rgba(15,23,42,.14), 0 14px 32px rgba(15,23,42,.22); }
 }
 
 /* 序号色块 —— 5 色循环 */
@@ -257,13 +260,13 @@
   line-height: 1;
 }
 .videoNoLabel { font-size: 9px; font-weight: 600; opacity: .85; margin-top: 2px; }
-.videoCard:nth-child(5n+1) .videoNo { background: linear-gradient(135deg, #60a5fa, #2563eb); box-shadow: 0 4px 12px rgba(37,99,235,.34); }
-.videoCard:nth-child(5n+2) .videoNo { background: linear-gradient(135deg, #38bdf8, #0284c7); box-shadow: 0 4px 12px rgba(2,132,199,.32); }
-.videoCard:nth-child(5n+3) .videoNo { background: linear-gradient(135deg, #818cf8, #4f46e5); box-shadow: 0 4px 12px rgba(79,70,229,.32); }
-.videoCard:nth-child(5n+4) .videoNo { background: linear-gradient(135deg, #22d3ee, #0891b2); box-shadow: 0 4px 12px rgba(8,145,178,.30); }
-.videoCard:nth-child(5n+5) .videoNo { background: linear-gradient(135deg, #2dd4bf, #0d9488); box-shadow: 0 4px 12px rgba(13,148,136,.28); }
+.videoCard:nth-child(5n+1) .videoNo { background: var(--th-c1); box-shadow: 0 4px 12px var(--th-c1s); }
+.videoCard:nth-child(5n+2) .videoNo { background: var(--th-c2); box-shadow: 0 4px 12px var(--th-c2s); }
+.videoCard:nth-child(5n+3) .videoNo { background: var(--th-c3); box-shadow: 0 4px 12px var(--th-c3s); }
+.videoCard:nth-child(5n+4) .videoNo { background: var(--th-c4); box-shadow: 0 4px 12px var(--th-c4s); }
+.videoCard:nth-child(5n+5) .videoNo { background: var(--th-c5); box-shadow: 0 4px 12px var(--th-c5s); }
 
-.videoInfo { flex: 1; min-width: 0; }
+.videoInfo { flex: 1; min-width: 0; padding-right: 26px; }
 
 .videoName {
   font-size: 14.5px;
@@ -278,7 +281,8 @@
 .videoMeta {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow: hidden;
   gap: 6px;
   font-size: 12px;
   color: #64748b;
@@ -300,36 +304,45 @@
   font-weight: 600;
   white-space: nowrap;
 }
-.videoCard:nth-child(5n+1) .chip { background: #eff6ff; color: #2563eb; }
-.videoCard:nth-child(5n+2) .chip { background: #f0f9ff; color: #0284c7; }
-.videoCard:nth-child(5n+3) .chip { background: #eef2ff; color: #4f46e5; }
-.videoCard:nth-child(5n+4) .chip { background: #ecfeff; color: #0e7490; }
-.videoCard:nth-child(5n+5) .chip { background: #f0fdfa; color: #0d9488; }
+.videoCard:nth-child(5n+1) .chip { background: var(--th-b1); color: var(--th-f1); }
+.videoCard:nth-child(5n+2) .chip { background: var(--th-b2); color: var(--th-f2); }
+.videoCard:nth-child(5n+3) .chip { background: var(--th-b3); color: var(--th-f3); }
+.videoCard:nth-child(5n+4) .chip { background: var(--th-b4); color: var(--th-f4); }
+.videoCard:nth-child(5n+5) .chip { background: var(--th-b5); color: var(--th-f5); }
 
 .videoScript {
   margin-top: 7px;
   font-size: 12px;
   color: #94a3b8;
   line-height: 1.5;
+  /* 摘要固定两行（超出自动省略号），否则长短剧本会把卡撑成不同高度 */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
+/* 删除键钉在卡片右上角（卡片是 position: relative） */
 .videoDelete {
-  flex-shrink: 0;
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-  background: #f1f5f9;
-  color: #94a3b8;
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: transparent;
+  color: #b6c2d2;
   border: none;
-  font-size: 17px;
   line-height: 1;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 0;
   transition: background .15s, color .15s;
   -webkit-tap-highlight-color: transparent;
 }
+.videoDelete svg { width: 15px; height: 15px; }
 .videoDelete:active,
 .videoDelete:hover { background: #fee2e2; color: #dc2626; }
 
@@ -353,7 +366,7 @@
   align-items: center;
   justify-content: center;
   font-size: 30px;
-  background: linear-gradient(135deg, #dbeafe, #cffafe);
+  background: var(--th-soft-grad);
 }
 
 .emptyHint {
@@ -416,14 +429,14 @@
 /* 主按钮：胶囊渐变（「+ 添加视频」用它 —— 那是这个页面的主要动作） */
 .addVideoBtn {
   padding: 6px 14px;
-  background: linear-gradient(135deg, #2563eb, #3b82f6);
+  background: var(--th-btn-grad);
   color: #fff;
   border: none;
   border-radius: 999px;
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  box-shadow: 0 4px 12px rgba(37,99,235,.30);
+  box-shadow: 0 4px 12px var(--th-btn-shadow);
   transition: transform .12s;
   -webkit-tap-highlight-color: transparent;
 }
@@ -1270,7 +1283,7 @@
   border-radius: 999px;
   background: #fff;
   cursor: pointer;
-  color: #2563eb;
+  color: var(--th-accent-deep);
   box-shadow: 0 2px 8px rgba(15,23,42,.07);
   -webkit-tap-highlight-color: transparent;
 }

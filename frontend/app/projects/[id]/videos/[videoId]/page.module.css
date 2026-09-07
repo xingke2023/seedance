@@ -8,7 +8,7 @@
 /* Layout: left sidebar + right main */
 .layout {
   display: flex;
-  height: calc(100vh - var(--topnav-h, 52px));
+  height: calc(100vh - var(--topnav-h, 60px));
   overflow: hidden;
 }
 

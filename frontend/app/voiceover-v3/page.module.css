@@ -12,7 +12,7 @@
 
 /* ─── Body ───────────────────────────────────────────────────────────────── */
 .body { padding-top: 0; }
-.breadcrumbBar { position: -webkit-sticky; position: sticky; top: var(--topnav-h, 52px); z-index: 90; display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: #f8fafc; border-bottom: 1px solid #e5e7eb; gap: 8px; }
+.breadcrumbBar { position: -webkit-sticky; position: sticky; top: var(--topnav-h, 60px); z-index: 90; display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: #f8fafc; border-bottom: 1px solid #e5e7eb; gap: 8px; }
 .mobileParams { padding: 12px 12px 16px; margin-bottom: 12px; }
 .wrap { max-width: 1536px; margin: 0 auto; padding: 8px 12px 12px; }
 .layout { display: flex; flex-direction: column; gap: 16px; }

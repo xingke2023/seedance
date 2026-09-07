@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
+import { haptic, hapticStrong } from '@/lib/haptics';
 import { ProjectSubject } from '@/components/video-editor/types';
 import styles from './page.module.css';
 
@@ -514,7 +515,7 @@ export default function ProjectDetailPage() {
   const [subjectsOpen, setSubjectsOpen] = useState(false);
   const [videoPage, setVideoPage] = useState(0);
   const PAGE_SIZE = 10;          // 角色栏（当前隐藏）
-  const VIDEO_PAGE_SIZE = 5;     // 视频列表每页 5 条
+  const VIDEO_PAGE_SIZE = 3;     // 视频列表每页 3 条
   const aiBottomRef = useRef<HTMLDivElement>(null);
   const aiFileRef = useRef<HTMLInputElement>(null);
   const aiIdRef = useRef(0);
@@ -617,6 +618,7 @@ export default function ProjectDetailPage() {
 
   async function handleCreateVideo() {
     if (!newVideoName.trim()) return;
+    haptic();
     setCreating(true);
     try {
       const data = await api.post<Video>(`/projects/${projectId}/videos`, { name: newVideoName.trim() });
@@ -632,6 +634,7 @@ export default function ProjectDetailPage() {
 
   async function handleDeleteVideo(e: React.MouseEvent, id: string) {
     e.stopPropagation();
+    hapticStrong();
     if (!confirm('确定删除该视频？所有分镜将一并删除。')) return;
     try {
       await api.del(`/videos/${id}`);
@@ -1221,7 +1224,7 @@ export default function ProjectDetailPage() {
       <section className={styles.videoSection}>
         <div className={styles.subjectHeader}>
           <h2 className={styles.subjectTitle}>本项目的视频</h2>
-          <button className={styles.addVideoBtn} onClick={() => setShowCreate(true)}>+ 添加视频</button>
+          <button className={styles.addVideoBtn} onClick={() => { haptic(); setShowCreate(true); }}>+ 添加视频</button>
         </div>
 
         {showCreate && (
@@ -1255,7 +1258,7 @@ export default function ProjectDetailPage() {
           {videos.slice(videoPage * VIDEO_PAGE_SIZE, (videoPage + 1) * VIDEO_PAGE_SIZE).map((video, idx) => {
             const status = STATUS_MAP[video.status] || STATUS_MAP.draft;
             return (
-              <div key={video.id} className={styles.videoCard} onClick={() => router.push(`/voiceover-v3?projectId=${projectId}&videoId=${video.id}`)}>
+              <div key={video.id} className={styles.videoCard} onClick={() => { haptic(); router.push(`/voiceover-v3?projectId=${projectId}&videoId=${video.id}`); }}>
                 <div className={styles.videoNo}>
                   {videoPage * VIDEO_PAGE_SIZE + idx + 1}
                   <span className={styles.videoNoLabel}>视频</span>
@@ -1269,12 +1272,19 @@ export default function ProjectDetailPage() {
                     <span className={styles.chip}>{video.shot_count} 分镜</span>
                     <span className={styles.chip}>{video.ratio}</span>
                   </div>
+                  {/* 省略号交给 CSS 的两行截断，slice 只是别把整篇剧本塞进 DOM */}
                   {video.script && (
-                    <div className={styles.videoScript}>{video.script.slice(0, 80)}{video.script.length > 80 ? '...' : ''}</div>
+                    <div className={styles.videoScript}>{video.script.slice(0, 200)}</div>
                   )}
                 </div>
                 <button className={styles.videoDelete} onClick={e => handleDeleteVideo(e, video.id)} title="删除">
-                  ×
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+                       strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M3 6h18" />
+                    <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" />
+                    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                    <path d="M10 11v6M14 11v6" />
+                  </svg>
                 </button>
               </div>
             );
@@ -1282,10 +1292,10 @@ export default function ProjectDetailPage() {
         </div>
         {videos.length > VIDEO_PAGE_SIZE && (
           <div className={styles.mobilePagination}>
-            <button onClick={() => setVideoPage(p => Math.max(0, p - 1))} disabled={videoPage === 0}
+            <button onClick={() => { haptic(); setVideoPage(p => Math.max(0, p - 1)); }} disabled={videoPage === 0}
               className={`${styles.pageBtn} ${videoPage === 0 ? styles.pageBtnDisabled : ''}`}>上一页</button>
             <span className={styles.pageInfo}>{videoPage + 1} / {Math.ceil(videos.length / VIDEO_PAGE_SIZE)}</span>
-            <button onClick={() => setVideoPage(p => Math.min(Math.ceil(videos.length / VIDEO_PAGE_SIZE) - 1, p + 1))} disabled={videoPage >= Math.ceil(videos.length / VIDEO_PAGE_SIZE) - 1}
+            <button onClick={() => { haptic(); setVideoPage(p => Math.min(Math.ceil(videos.length / VIDEO_PAGE_SIZE) - 1, p + 1)); }} disabled={videoPage >= Math.ceil(videos.length / VIDEO_PAGE_SIZE) - 1}
               className={`${styles.pageBtn} ${videoPage >= Math.ceil(videos.length / VIDEO_PAGE_SIZE) - 1 ? styles.pageBtnDisabled : ''}`}>下一页</button>
           </div>
         )}
@@ -1294,7 +1304,7 @@ export default function ProjectDetailPage() {
       </section>
     </div>
 
-      <button className={styles.fab} onClick={() => setShowCreate(true)} title="添加视频">
+      <button className={styles.fab} onClick={() => { haptic(); setShowCreate(true); }} title="添加视频">
         +
       </button>
     </div>

@@ -1,11 +1,8 @@
 /* ── 手机 APP 样式：居中窄栏 + 渐变色块 ───────────────────────── */
 
 .shell {
-  min-height: calc(100vh - var(--topnav-h, 52px));
-  background:
-    radial-gradient(900px 380px at 12% -8%, #dbeafe 0%, rgba(219,234,254,0) 62%),
-    radial-gradient(760px 340px at 92% 4%, #e0f2fe 0%, rgba(224,242,254,0) 60%),
-    #f5f8ff;
+  min-height: calc(100vh - var(--topnav-h, 60px));
+  background: var(--th-shell-bg);
   padding-bottom: 40px;
 }
 
@@ -21,8 +18,8 @@
   border-radius: 12px;
   padding: 14px 16px 12px;
   color: #fff;
-  background: linear-gradient(135deg, #2563eb 0%, #3b82f6 50%, #60a5fa 100%);
-  box-shadow: 0 6px 16px rgba(59,130,246,.24);
+  background: var(--th-hero-grad);
+  box-shadow: 0 6px 16px var(--th-hero-shadow);
 }
 .hero::after {
   content: '';
@@ -56,9 +53,9 @@
 
 .title {
   font-size: 18px;
-  font-weight: 700;
+  font-weight: 500;
   margin: 0;
-  letter-spacing: -0.2px;
+  letter-spacing: 0.2px;
 }
 
 .subtitle {
@@ -90,7 +87,7 @@
   flex-shrink: 0;
   padding: 6px 12px;
   background: rgba(255,255,255,.95);
-  color: #1d4ed8;
+  color: var(--th-accent-deep);
   border: none;
   border-radius: 999px;
   font-size: 12px;
@@ -126,11 +123,11 @@
   outline: none;
   transition: border-color .15s, background .15s;
 }
-.createInput:focus { border-color: #3b82f6; background: #fff; }
+.createInput:focus { border-color: var(--th-focus); background: #fff; }
 
 .createConfirm {
   padding: 10px 16px;
-  background: linear-gradient(135deg, #2563eb, #3b82f6);
+  background: var(--th-btn-grad);
   color: #fff;
   border: none;
   border-radius: 8px;
@@ -189,13 +186,15 @@
   background: #fff;
   border-radius: 12px;
   cursor: pointer;
-  box-shadow: 0 3px 12px rgba(15,23,42,.06);
-  transition: transform .12s ease, box-shadow .18s ease;
+  /* 和项目页的视频卡同一套：描边定轮廓 + 两层阴影 */
+  border: 1px solid var(--th-border);
+  box-shadow: 0 1px 3px rgba(15,23,42,.13), 0 8px 20px rgba(15,23,42,.16);
+  transition: transform .12s ease, box-shadow .18s ease, border-color .18s ease;
   -webkit-tap-highlight-color: transparent;
 }
-.card:active { transform: scale(.985); box-shadow: 0 2px 6px rgba(15,23,42,.08); }
+.card:active { transform: scale(.985); box-shadow: 0 1px 3px rgba(15,23,42,.18); }
 @media (hover: hover) {
-  .card:hover { box-shadow: 0 8px 22px rgba(15,23,42,.10); }
+  .card:hover { border-color: var(--th-border-hover); box-shadow: 0 2px 5px rgba(15,23,42,.14), 0 14px 32px rgba(15,23,42,.22); }
 }
 
 /* 彩色缩略块 —— 5 色循环 */
@@ -211,11 +210,11 @@
   overflow: hidden;
 }
 .thumb img { width: 100%; height: 100%; object-fit: cover; }
-.card:nth-child(5n+1) .thumb { background: linear-gradient(135deg, #60a5fa, #2563eb); box-shadow: 0 4px 12px rgba(37,99,235,.34); }
-.card:nth-child(5n+2) .thumb { background: linear-gradient(135deg, #38bdf8, #0284c7); box-shadow: 0 4px 12px rgba(2,132,199,.32); }
-.card:nth-child(5n+3) .thumb { background: linear-gradient(135deg, #818cf8, #4f46e5); box-shadow: 0 4px 12px rgba(79,70,229,.32); }
-.card:nth-child(5n+4) .thumb { background: linear-gradient(135deg, #22d3ee, #0891b2); box-shadow: 0 4px 12px rgba(8,145,178,.30); }
-.card:nth-child(5n+5) .thumb { background: linear-gradient(135deg, #2dd4bf, #0d9488); box-shadow: 0 4px 12px rgba(13,148,136,.28); }
+.card:nth-child(5n+1) .thumb { background: var(--th-c1); box-shadow: 0 4px 12px var(--th-c1s); }
+.card:nth-child(5n+2) .thumb { background: var(--th-c2); box-shadow: 0 4px 12px var(--th-c2s); }
+.card:nth-child(5n+3) .thumb { background: var(--th-c3); box-shadow: 0 4px 12px var(--th-c3s); }
+.card:nth-child(5n+4) .thumb { background: var(--th-c4); box-shadow: 0 4px 12px var(--th-c4s); }
+.card:nth-child(5n+5) .thumb { background: var(--th-c5); box-shadow: 0 4px 12px var(--th-c5s); }
 
 .cardBody { flex: 1; min-width: 0; }
 
@@ -242,11 +241,11 @@
   border-radius: 999px;
   white-space: nowrap;
 }
-.card:nth-child(5n+1) .badge { background: #eff6ff; color: #2563eb; }
-.card:nth-child(5n+2) .badge { background: #f0f9ff; color: #0284c7; }
-.card:nth-child(5n+3) .badge { background: #eef2ff; color: #4f46e5; }
-.card:nth-child(5n+4) .badge { background: #ecfeff; color: #0e7490; }
-.card:nth-child(5n+5) .badge { background: #f0fdfa; color: #0d9488; }
+.card:nth-child(5n+1) .badge { background: var(--th-b1); color: var(--th-f1); }
+.card:nth-child(5n+2) .badge { background: var(--th-b2); color: var(--th-f2); }
+.card:nth-child(5n+3) .badge { background: var(--th-b3); color: var(--th-f3); }
+.card:nth-child(5n+4) .badge { background: var(--th-b4); color: var(--th-f4); }
+.card:nth-child(5n+5) .badge { background: var(--th-b5); color: var(--th-f5); }
 
 .cardDate { font-size: 11.5px; color: #94a3b8; }
 
@@ -307,7 +306,7 @@
   align-items: center;
   justify-content: center;
   font-size: 32px;
-  background: linear-gradient(135deg, #dbeafe, #cffafe);
+  background: var(--th-soft-grad);
 }
 
 .emptyHint {
@@ -320,18 +319,17 @@
 /* ── 使用指南 ────────────────────────────────────────────────── */
 
 .guide {
-  margin-top: 22px;
-  padding: 16px 16px 6px;
-  background: #fff;
-  border-radius: 12px;
-  box-shadow: 0 3px 12px rgba(15,23,42,.06);
+  /* 比卡片列表窄一截：它是页脚性质的说明，不该和项目卡等宽 */
+  max-width: 620px;
+  margin-top: 26px;
+  padding: 0 4px;
 }
 
 .guideTitle {
   font-size: 15px;
-  font-weight: 700;
-  color: #0f172a;
-  margin: 0 0 4px 0;
+  font-weight: 600;
+  color: #7d8ba1;
+  margin: 0 0 2px 0;
 }
 
 .guideSteps { display: flex; flex-direction: column; }
@@ -341,20 +339,21 @@
   gap: 12px;
   align-items: flex-start;
   padding: 12px 0;
-  border-bottom: 1px solid #f1f5f9;
+  border-bottom: 1px solid rgba(148,163,184,.28);
 }
 .guideStep:last-child { border-bottom: none; }
 
 .guideStep strong {
   font-size: 13.5px;
-  color: #0f172a;
+  font-weight: 600;
+  color: #7d8ba1;
   display: block;
   margin-bottom: 3px;
 }
 
 .guideStep p {
   font-size: 12.5px;
-  color: #64748b;
+  color: #9aa6b8;
   margin: 0;
   line-height: 1.55;
 }
@@ -371,10 +370,10 @@
   align-items: center;
   justify-content: center;
 }
-.guideStep:nth-child(1) .guideNum { background: linear-gradient(135deg, #60a5fa, #2563eb); }
-.guideStep:nth-child(2) .guideNum { background: linear-gradient(135deg, #38bdf8, #0284c7); }
-.guideStep:nth-child(3) .guideNum { background: linear-gradient(135deg, #818cf8, #4f46e5); }
-.guideStep:nth-child(4) .guideNum { background: linear-gradient(135deg, #22d3ee, #0891b2); }
+.guideStep:nth-child(1) .guideNum { background: var(--th-c1); }
+.guideStep:nth-child(2) .guideNum { background: var(--th-c2); }
+.guideStep:nth-child(3) .guideNum { background: var(--th-c3); }
+.guideStep:nth-child(4) .guideNum { background: var(--th-c4); }
 
 /* ── 悬浮新建按钮（FAB） ─────────────────────────────────────── */
 
@@ -391,8 +390,8 @@
   font-size: 28px;
   line-height: 1;
   cursor: pointer;
-  background: linear-gradient(135deg, #2563eb, #38bdf8);
-  box-shadow: 0 10px 24px rgba(37,99,235,.42);
+  background: var(--th-fab-grad);
+  box-shadow: 0 10px 24px var(--th-fab-shadow);
   display: flex;
   align-items: center;
   justify-content: center;
