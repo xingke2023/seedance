@@ -5,8 +5,9 @@ import { createPortal } from 'react-dom';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import dynamic from 'next/dynamic';
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
 import { CameraState, ShotSubject, ProjectSubject } from '@/components/video-editor/types';
+import { buildContentMedia, mediaNoOf, subjectImageNo, normalizeAssetUrl } from '@/lib/contentMedia';
 import styles from './page.module.css';
 import StoryboardGenerator, {
   toShotDrafts, DEFAULT_STORYBOARD_SETTINGS,
@@ -57,6 +58,7 @@ interface ShotTask {
   duration:  number | null;
   error:     string | null;
   submitting:boolean;
+  startedAt?: number;      // 提交时刻（ms）。排太久时据此放出「重新生成」
 }
 
 interface InitResult {
@@ -85,7 +87,7 @@ interface MediaItem {
 type AnalysisItem = {
   label: string; type: string; appearance: string; personality: string;
   linkedSubjectId?: string; linkedAudioUrl?: string;
-  _pickerOpen?: boolean; _voicePickerOpen?: boolean;
+  _voicePickerOpen?: boolean;
 };
 
 // ─── 自动配音色 ──────────────────────────────────────────────────────────────
@@ -143,7 +145,8 @@ function pickPresetVoice(a: AnalysisItem, presets: VoicePreset[], taken: Set<str
 // 角色/素材上下文的构建（纯函数）。生成分镜那一刻可能刚给角色自动配了音色，
 // state 还没落地，所以要能拿「算好的那份」直接构建，不能只依赖 useMemo 里的旧值。
 function buildSubjectContext(videoSubjects: ProjectSubject[], mediaItems: MediaItem[], scriptAnalysis: AnalysisItem[]) {
-    const readyImages = mediaItems.filter(m => m.url && !m.uploading && m.mediaType === 'image');
+    const contentMedia = buildContentMedia(videoSubjects, mediaItems);
+    const readyImages = contentMedia.filter(x => x.from === 'media' && x.mediaType === 'image');
     const withImage    = videoSubjects.filter(s => s.image_url);
     const withoutImage = videoSubjects.filter(s => !s.image_url);
     const nameOf = (s: ProjectSubject) =>
@@ -161,16 +164,19 @@ function buildSubjectContext(videoSubjects: ProjectSubject[], mediaItems: MediaI
     };
     // 角色的音色：@图片N 的那个人用哪一条 @音频M。绑定挂在剧本分析的角色卡上，
     // 这里按主体反查回去 —— 形象和音色是同一个人的两半，提示词里要一起写明。
-    const readyAudios0 = mediaItems.filter(m => m.url && !m.uploading && m.mediaType === 'audio');
+    const readyAudios0 = contentMedia.filter(x => x.mediaType === 'audio');
     const audioNumOf = (s: ProjectSubject) => {
       const url = scriptAnalysis.find(a => a.linkedSubjectId === s.id)?.linkedAudioUrl;
-      const n = url ? readyAudios0.findIndex(m => m.url === url) : -1;
+      const n = url ? readyAudios0.findIndex(m => m.url === normalizeAssetUrl(url)) : -1;
       return n >= 0 ? n + 1 : 0;
     };
+    // 角色的图片编号**从 content 的排布里查**，不按 withImage 的下标猜 ——
+    // 两处各算各的，哪天排法改了就会指到别人的图上
+    const imageNumOf = (s: ProjectSubject) => subjectImageNo(contentMedia, s.id);
     const characterLines = [
-      ...withImage.map((s, i) => {
+      ...withImage.map(s => {
         const an = audioNumOf(s);
-        return `角色「${nameOf(s)}」绑定@图片${i + 1}${an ? `、音色@音频${an}` : ''}，外貌描述：${visualOf(s) || '见图片'}`;
+        return `角色「${nameOf(s)}」绑定@图片${imageNumOf(s)}${an ? `、音色@音频${an}` : ''}，外貌描述：${visualOf(s) || '见图片'}`;
       }),
       ...withoutImage.map(s => {
         const an = audioNumOf(s);
@@ -179,20 +185,20 @@ function buildSubjectContext(videoSubjects: ProjectSubject[], mediaItems: MediaI
     ];
     // 素材编号按类型各排各的 —— content 里图片/视频/音频是分开计数的，
     // Seedance 提示词里用 图片N / 视频N / 音频N 指代第 N 个该类型素材。
-    const readyVideos = mediaItems.filter(m => m.url && !m.uploading && m.mediaType === 'video');
+    const readyVideos = contentMedia.filter(x => x.mediaType === 'video');
     const readyAudios = readyAudios0;
     // 音频挂到了哪个角色身上，说明里就点名写出来（模型才知道这条音色是谁的）
     const audioOwner = new Map<string, string>();
     videoSubjects.forEach(s => {
       const url = scriptAnalysis.find(a => a.linkedSubjectId === s.id)?.linkedAudioUrl;
-      if (url) audioOwner.set(url, nameOf(s));
+      if (url) audioOwner.set(normalizeAssetUrl(url), nameOf(s));
     });
     const descLines = [
-      ...withImage.map((s, i) => {
+      ...withImage.map(s => {
         const an = audioNumOf(s);
-        return `图片${i + 1}：角色「${nameOf(s)}」${an ? `（音色见@音频${an}）` : ''}— ${descOf(s) || '见图片'}`;
+        return `图片${imageNumOf(s)}：角色「${nameOf(s)}」${an ? `（音色见@音频${an}）` : ''}— ${descOf(s) || '见图片'}`;
       }),
-      ...readyImages.map((m, i) => `图片${withImage.length + i + 1}：参考素材「${m.name || '素材'}」— ${m.description || ''}`),
+      ...readyImages.map(m => `图片${mediaNoOf(contentMedia, m)}：参考素材「${m.name || '素材'}」— ${m.description || ''}`),
       ...readyVideos.map((m, i) => `视频${i + 1}：参考视频「${m.name || '素材'}」— ${m.description || ''}`),
       ...readyAudios.map((m, i) => {
         const owner = audioOwner.get(m.url || '');
@@ -205,13 +211,17 @@ function buildSubjectContext(videoSubjects: ProjectSubject[], mediaItems: MediaI
       characterDefs:     characterLines.join('\n'),
       imageDescriptions: descLines.join('\n'),
       subjectsWithImage: withImage,   // 1-based 编号 → 角色，供 image_refs 反查
+      contentMedia,                   // content 里素材的最终排布（编号的唯一依据）
     };
 }
 
 
 interface AvatarItem { assetId: string; label: string; thumb: string; }
 
-const MEDIA_LIMITS = { image: 8, video: 4, audio: 4 } as const;
+// Seedance 一次请求里的素材硬上限：image_url 9 个、video_url / audio_url 各 3 个。
+// ⚠️ 图片这 9 个是**整条请求**的额度，带图角色的头像也占位（提交时排在参考素材之前），
+//    所以参考素材能上传几张图要减掉角色数 —— 见组件里的 mediaLimit()。
+const MEDIA_CAPS   = { image: 9, video: 3, audio: 3 } as const;
 const MEDIA_ZH     = { image: '图片', video: '视频', audio: '音频' } as const;
 
 const API_BASE = '/api';
@@ -256,17 +266,14 @@ function getVideoInfo(file: File): Promise<{ duration: number; width: number; he
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-// 只影响分镜脚本生成（storyboard 的 video_type），不切换任何输入框
-const VIDEO_TYPES = [
-  { value: 'story'     as const, label: '叙事短片' },
-  { value: 'narration' as const, label: '解说纪录片' },
-];
-
 const MODELS = [
   { value: 'doubao-seedance-2-0',             label: 'Seedance 2.0' },
   { value: 'doubao-seedance-2-0-260128',      label: 'Seedance 2.0 (260128)' },
   { value: 'doubao-seedance-2-5',             label: 'Seedance 2.5' },
 ];
+// 新建视频用哪个型号。不写成 MODELS[0] —— 默认值和下拉里的排列顺序是两回事，
+// 已存的视频仍以库里 params.model 为准。
+const DEFAULT_MODEL = 'doubao-seedance-2-0-260128';
 
 const RESOLUTIONS = [
   { value: '720p',  label: '720p' },
@@ -388,6 +395,25 @@ const DEFAULT_BANNER_STYLE: BannerStyle = {
 
 const TERMINAL = new Set(['succeeded', 'failed', 'expired', 'cancelled']);
 
+// 展开的分镜卡按页签分区：场景描述最常改，放第一个；提交 JSON 是排查用的，放最后
+const SHOT_TABS = [
+  ['prompt',   '场景描述'],
+  ['subtitle', '字幕'],
+  ['params',   '参数'],
+  ['json',     'JSON'],
+  ['preview',  '预览'],
+] as const;
+type ShotTabKey = typeof SHOT_TABS[number][0];
+
+// 排队/生成超过这个时长就在分镜上放出「重新生成」。Seedance 正常一两分钟出片，
+// 排队高峰会久一些 —— 3 分钟还没动静基本就是卡在队列里，等下去和重开一个没差别。
+const STUCK_AFTER_MS = 3 * 60_000;
+
+function fmtElapsed(ms: number) {
+  const sec = Math.max(0, Math.round(ms / 1000));
+  return sec < 60 ? `${sec} 秒` : `${Math.floor(sec / 60)} 分 ${String(sec % 60).padStart(2, '0')} 秒`;
+}
+
 const SHOT_SIZES = [
   { value: '特写', label: '特写' },
   { value: '近景', label: '近景' },
@@ -449,6 +475,46 @@ function normalizeCameraMove(raw: string): string {
   for (const [re, label] of CAMERA_MOVE_RULES) if (re.test(v)) return label;
   return v;
 }
+
+// 分镜属性标签条：景别 / A-B roll / 情绪 / 光影氛围 / 运镜 / 时长 / 主体 / 3D。
+// 原来挂在收起的列表行上，但「光影氛围」存的是模型给的英文光线描述，一条就能把那行撑成两行，
+// 所以整排挪进展开后的「参数」页签，收起行只留标题和一句话描述。
+function ShotChips({ shot }: { shot: VoiceoverShot }) {
+  return (<>
+    {shot.shot_size && <span style={{ fontSize: 10, color: '#6b7280', background: '#f3f4f6', borderRadius: 3, padding: '1px 4px' }}>{shot.shot_size}</span>}
+    {shot.roll_type && (
+      <span title={shot.roll_type === 'a_roll' ? '画面里有人正对镜头说话' : '补充画面，不含正面口播'}
+        style={{ fontSize: 10, borderRadius: 3, padding: '1px 4px',
+          color: shot.roll_type === 'a_roll' ? '#9a3412' : '#0f766e',
+          background: shot.roll_type === 'a_roll' ? '#ffedd5' : '#ccfbf1' }}>
+        {shot.roll_type === 'a_roll' ? 'A-roll' : 'B-roll'}
+      </span>
+    )}
+    {shot.voice_style && VOICE_STYLE_TAGS[shot.voice_style] && (
+      <span title="这一镜旁白的情绪，配音时转成 Azure 的表达风格"
+        style={{ fontSize: 10, borderRadius: 3, padding: '1px 4px',
+          color: VOICE_STYLE_TAGS[shot.voice_style].fg,
+          background: VOICE_STYLE_TAGS[shot.voice_style].bg }}>
+        {VOICE_STYLE_TAGS[shot.voice_style].label}
+      </span>
+    )}
+    {shot.mood && <span style={{ fontSize: 10, color: '#92400e', background: '#fef3c7', borderRadius: 3, padding: '1px 4px' }}>{shot.mood}</span>}
+    {shot.camera_movement && <span style={{ fontSize: 10, color: '#1d4ed8', background: '#dbeafe', borderRadius: 3, padding: '1px 4px' }}>{shot.camera_movement}</span>}
+    <span style={{ fontSize: 10, color: '#6b7280' }}>{shot.duration}s</span>
+    {shot.subjects && shot.subjects.filter(displayLabel).length > 0 &&
+      <span style={{ fontSize: 10, color: '#7c3aed', background: '#f5f3ff', borderRadius: 3, padding: '1px 4px' }}>{shot.subjects.filter(displayLabel).join('/')}</span>}
+    {(shot.camera_pan || shot.camera_tilt || (shot.camera_zoom && shot.camera_zoom !== 1)) && <span style={{ fontSize: 10, color: '#059669', background: '#d1fae5', borderRadius: 3, padding: '1px 4px' }}>3D</span>}
+  </>);
+}
+
+// 换头像建出来的主体，名字曾经直接取素材的文件名（`微信图片_20260903143611_672_356.jpg`、
+// `bee8cdd3d1264296a566445ecc00e2f7.webp`）—— 当角色名显示毫无意义。新建的已改成用角色卡的
+// 名字（见 assignAssetAvatar），存量数据靠这个判定在显示时藏掉，不用迁库。
+const FILE_NAME_RE = /\.(jpe?g|png|webp|gif|bmp|heic|heif|avif|mp4|mov|webm|mp3|wav|m4a)$/i;
+const displayLabel = (label?: string | null) => {
+  const v = String(label || '').trim();
+  return FILE_NAME_RE.test(v) ? '' : v;
+};
 
 const STATUS_LABELS: Record<string, string> = {
   running:   '生成中…',
@@ -598,6 +664,32 @@ interface RemoteAsset {
   _thumbnail_url?: string;
   URL?: string;
   GroupId?: string;
+}
+
+interface RemoteAssetGroup { Id: string; Name: string | null; GroupType: 'AIGC' | 'LivenessFace'; }
+
+// 换头像走 /assets/real、/assets/virtual 同一套逻辑（先取该 groupType 下用户可见的资源组，
+// 再逐组取资源），不用 /assets/all——那条路径的 GetAsset 兜底不带 _thumbnail_url，图片列表里会丢缩略图。
+// 真人（LivenessFace）只能经活体验证入库，这一步天然只认证过的资源；只取 Image 类型，头像要的是静态照片。
+async function loadVerifiedAvatars(groupType: 'AIGC' | 'LivenessFace'): Promise<RemoteAsset[]> {
+  try {
+    const groupsRes = await api.get<{ Items: RemoteAssetGroup[] }>(`/assets/groups?groupType=${groupType}&region=cn`);
+    const groups = groupsRes?.Items || [];
+    const perGroup = await Promise.all(groups.map(async g => {
+      try {
+        const assetsRes = await api.get<{ Items: RemoteAsset[] }>(`/assets/groups/${g.Id}/assets?region=cn`);
+        const images = (assetsRes?.Items || []).filter(a => a.AssetType === 'Image');
+        return Promise.all(images.map(async item => {
+          if (item._thumbnail_url) return item;
+          try {
+            const detail = await api.get<{ URL?: string; Status?: string; _thumbnail_url?: string }>(`/assets/item/${item.Id}?region=cn`);
+            return { ...item, URL: detail.URL || item.URL, _thumbnail_url: detail._thumbnail_url, Status: detail.Status || item.Status };
+          } catch { return item; }
+        }));
+      } catch { return []; }
+    }));
+    return perGroup.flat();
+  } catch { return []; }
 }
 
 function AssetLibrary({ groupType, title, color, selectedIds, onAdd, onRemove }: {
@@ -849,29 +941,28 @@ function ParamsPanel(p: {
   const is2x = p.model.includes('2-0');
   const is15pro = p.model.includes('1-5') || p.model.includes('1.5');
 
-  const readyMedia = p.mediaItems.filter(m => m.url && !m.uploading);
-  const assetImages = readyMedia.filter(m => m.mediaType === 'image' && m.url?.startsWith('asset://'));
-  const uploadedImages = readyMedia.filter(m => m.mediaType === 'image' && !m.url?.startsWith('asset://'));
-  const videos = readyMedia.filter(m => m.mediaType === 'video');
-  const audios = readyMedia.filter(m => m.mediaType === 'audio');
+  // content 的素材排布走公共的 buildContentMedia() —— 这个预览曾经自己排一套
+  // （asset 图插到上传图前面），和它上面那段图片说明的编号对不上
+  const contentMedia = buildContentMedia(p.videoSubjects, p.mediaItems);
 
   const contentItems: unknown[] = [{ type: 'text', text: '(prompt内容)' }];
-  // Image descriptions text
   const subjectsWithImg = p.videoSubjects.filter(s => s.image_url);
   const imgDescLines: string[] = [];
-  subjectsWithImg.forEach((s, i) => {
-    const analysis = p.scriptAnalysis.find(a => a.linkedSubjectId === s.id);
-    const name = analysis?.label || s.label;
-    imgDescLines.push(`图片${i + 1}：角色「${name}」— ${s.description || '见图片'}`);
+  contentMedia.filter(x => x.mediaType === 'image').forEach(x => {
+    const no = mediaNoOf(contentMedia, x);
+    if (x.from === 'subject') {
+      const sub = p.videoSubjects.find(s => s.id === x.subjectId);
+      const analysis = p.scriptAnalysis.find(a => a.linkedSubjectId === x.subjectId);
+      imgDescLines.push(`图片${no}：角色「${analysis?.label || sub?.label || ''}」— ${sub?.description || '见图片'}`);
+    } else {
+      imgDescLines.push(`图片${no}：参考素材「${x.name || '素材'}」— ${x.description || ''}`);
+    }
   });
-  const mImagesForDesc = readyMedia.filter(m => m.mediaType === 'image');
-  mImagesForDesc.forEach((m, i) => imgDescLines.push(`图片${subjectsWithImg.length + i + 1}：参考素材「${m.name || '素材'}」— ${(m as any).description || ''}`));
   if (imgDescLines.length > 0) contentItems.push({ type: 'text', text: imgDescLines.join('\n') });
-  subjectsWithImg.forEach(s => contentItems.push({ type: 'image_url', image_url: { url: s.asset_id ? `asset://${s.asset_id}` : s.image_url }, role: 'reference_image' }));
-  assetImages.forEach(m => contentItems.push({ type: 'image_url', image_url: { url: m.url!.replace('asset://remote:', 'asset://') }, role: 'reference_image' }));
-  uploadedImages.forEach(m => contentItems.push({ type: 'image_url', image_url: { url: m.url }, role: 'reference_image' }));
-  videos.forEach(m => contentItems.push({ type: 'video_url', video_url: { url: m.url }, role: 'reference_video' }));
-  audios.forEach(m => contentItems.push({ type: 'audio_url', audio_url: { url: m.url }, role: 'reference_audio' }));
+  contentMedia.forEach(x => contentItems.push(
+    x.mediaType === 'image' ? { type: 'image_url', image_url: { url: x.url }, role: 'reference_image' }
+    : x.mediaType === 'video' ? { type: 'video_url', video_url: { url: x.url }, role: 'reference_video' }
+    : { type: 'audio_url', audio_url: { url: x.url }, role: 'reference_audio' }));
 
   const previewBody: Record<string, unknown> = {
     model: p.model,
@@ -1175,11 +1266,10 @@ export default function VoiceoverPage() {
 
   const [shots, setShots] = useState<VoiceoverShot[]>([]);
 
-  const [model, setModel]               = useState(MODELS[0].value);
+  const [model, setModel]               = useState(DEFAULT_MODEL);
   const [resolution, setResolution]     = useState('720p');
-  // 默认开：页面初始就是叙事短片，对白靠 Seedance 自己出人声（对白已写进 prompt），
-  // 关掉就只剩哑画面。切到解说纪录片会自动关（见 videoType 那个 effect）；
-  // 已保存的视频仍以库里 params.generateAudio 为准。
+  // 默认开：对白靠 Seedance 自己出人声（对白已写进 prompt），关掉就只剩哑画面。
+  // 打开已存的视频也回到开 —— 见下面读库那一段为什么不采信库里的 false。
   const [generateAudio, setGenerateAudio] = useState(true);
   const [watermark, setWatermark]         = useState(false);
   const [seed, setSeed]                   = useState<number | null>(null);
@@ -1188,7 +1278,7 @@ export default function VoiceoverPage() {
   const [returnLastFrame, setReturnLastFrame] = useState(false);
   const [draft, setDraft]                 = useState(false);
   const [webSearch, setWebSearch]         = useState(false);
-  const [region, setRegion]               = useState<'overseas' | 'cn'>('cn');
+  const [region, setRegion]               = useState<'overseas' | 'cn'>('overseas');
   const [subtitleMode, setSubtitleMode]   = useState<'on' | 'off'>('off');
   const [subtitleStyle, setSubtitleStyle] = useState<SubtitleStyle>(DEFAULT_SUBTITLE_STYLE);
   const [banner, setBanner]               = useState('');
@@ -1199,12 +1289,21 @@ export default function VoiceoverPage() {
   const [audioDuration, setAudioDuration] = useState<number>(0);
   const [wordBoundaries, setWordBoundaries] = useState<Array<{text: string; offset: number; duration: number}>>([]);
   const [ttsLoading, setTtsLoading]       = useState(false);
-  // 换音色重配后的提示：哪几镜的时长变化太大，合并贴不齐，必须重新生成
-  const [ttsNotice, setTtsNotice]         = useState('');
   // 分镜任务已经跑了多少秒（后端给的，回到页面时也能接着显示）
   const [initElapsed, setInitElapsed]     = useState(0);
+  // 叙事短片第一步在写的对白剧本 —— 流式，后端每收到一段新文本就更新一次任务状态，
+  // 这里跟着轮询往上刷；stage 从 'script' 变成 'shots' 就是剧本写完了、在拆分镜配运镜
+  const [sbStage, setSbStage]             = useState<'script' | 'shots' | ''>('');
+  // 后台任务回传的对白剧本正文：按钮下面已不再展示它，但流式片段仍要收下（不然
+  // 轮询里那几处 setSbScript 得跟着删，任务协议也要动）—— 只是没有读取方
+  const [, setSbScript]                   = useState('');
   const [tasks, setTasks]                 = useState<Record<number, ShotTask>>({});
+  // 「查看提交 JSON」手改的内容——键上有值就说明这一镜被编辑过，提交时原样发它，
+  // 不再从 prompt/orderedMedia 重新拼；没编辑过的镜头这里没有键，框里显示自动生成的默认值
+  const [shotJsonEdits, setShotJsonEdits] = useState<Record<number, string>>({});
   const pollRefs = useRef<Record<number, ReturnType<typeof setInterval>>>({});
+  // 分镜卡上的「已等待 X」要走秒 —— 只在有非终态任务时开这只表，全跑完就停
+  const [taskNow, setTaskNow] = useState(() => Date.now());
   const mediaInputRef = useRef<HTMLInputElement>(null);
   const batchSeedRef = useRef<number | null>(null);
 
@@ -1217,14 +1316,16 @@ export default function VoiceoverPage() {
 
   const [showMobileParams, setShowMobileParams] = useState(false);
   const [showExamples, setShowExamples] = useState(false);
-  const [videoType, setVideoType] = useState<'story' | 'narration'>('story');
-  const [showSubtitleTip, setShowSubtitleTip] = useState(false);
   const [showMediaTip, setShowMediaTip] = useState(false);
 
   const [mediaItems, setMediaItems]   = useState<MediaItem[]>([]);
   const [uploadError, setUploadError] = useState('');
-  const [avatars, setAvatars]         = useState<AvatarItem[]>([]);
+  const [realAvatars, setRealAvatars]     = useState<RemoteAsset[]>([]);
+  const [virtualAvatars, setVirtualAvatars] = useState<RemoteAsset[]>([]);
+  const [avatarLoading, setAvatarLoading] = useState(false);
   const [avatarSearch, setAvatarSearch] = useState('');
+  const [avatarPickerIdx, setAvatarPickerIdx] = useState<number | null>(null);
+  const [avatarPickerTab, setAvatarPickerTab] = useState<'real' | 'virtual'>('real');
   const [avatarExpanded, setAvatarExpanded] = useState(false);
 
   const [subjectDefs, setSubjectDefs]         = useState('');
@@ -1235,6 +1336,8 @@ export default function VoiceoverPage() {
   const [resetKey, setResetKey]             = useState(0);
   const [dataLoaded, setDataLoaded] = useState(false);
   const [expandedShots, setExpandedShots]   = useState<Record<number, boolean>>({});
+  // 展开的分镜卡分成四个页签，各记各的（默认「场景描述」——最常改的那一页）
+  const [shotTabs, setShotTabs]             = useState<Record<number, ShotTabKey>>({});
   const [allShotsExpanded, setAllShotsExpanded] = useState(false);
   const [cameraEditorIdx, setCameraEditorIdx] = useState<number | null>(null);
   const [shotMediaIdx, setShotMediaIdx] = useState<number | null>(null);
@@ -1248,43 +1351,43 @@ export default function VoiceoverPage() {
   const [scriptAnalysis, setScriptAnalysis] = useState<AnalysisItem[]>([]);
   const [analyzingScript, setAnalyzingScript] = useState(false);
   const [scriptAnalysisError, setScriptAnalysisError] = useState('');
-  const [analysisCollapsed, setAnalysisCollapsed] = useState(false);
-  const [mediaCollapsed, setMediaCollapsed] = useState(false);
+  // 「剧本分析」按钮写出来的完整对白剧本 —— 和「生成分镜脚本」第一步是同一份东西，
+  // 提前写好了就存这里，点「生成分镜脚本」时直接带过去，后端不用再重写一遍
+  const [dialogueScript, setDialogueScript] = useState('');
+  // 「AI改写」浮窗：改写要求 + 改写中的流式预览（复用剧本分析同一套流式轮询手法）
+  const [rewriteOpen, setRewriteOpen] = useState(false);
+  const [rewriteInstruction, setRewriteInstruction] = useState('');
+  const [rewritingScript, setRewritingScript] = useState(false);
+  const [rewritePreview, setRewritePreview] = useState('');
+  const [rewriteError, setRewriteError] = useState('');
+  // 对白剧本 / 角色 / 参考素材 三块合成页签（以前是三段顺排的折叠区，一屏塞不下）
+  const [stepTab, setStepTab] = useState<'script' | 'roles' | 'media'>('script');
+  // 页签内容整体折叠（页签条本身留着）—— 分镜多起来的时候这三块很占屏
+  const [tabsCollapsed, setTabsCollapsed] = useState(false);
+  // 分镜列表也能整体折叠（合并那一块留在外面，折起来照样能合并/下载）
+  const [shotsCollapsed, setShotsCollapsed] = useState(false);
   const [scriptCollapsed, setScriptCollapsed] = useState(false);
   const [sbOpen, setSbOpen] = useState(false);
   const [sbSettings, setSbSettings] = useState<StoryboardSettings>(DEFAULT_STORYBOARD_SETTINGS);
 
-  // 唯一那个 textarea 始终写 script，两种视频类型共用同一份文本。
-  // 选解说纪录片时把它镜像进 subtitleInput —— 那份文本本身就是字幕/解说词。
+  // 唯一那个 textarea 始终写 script，是视频描述；字幕交给后端按脚本自动生成。
   const conceptText = script;
   const setConceptText = (v: string) => {
     setScript(v);
-    // 叙事短片下这份文本只是概念描述，字幕保持为空
-    if (videoType === 'narration') { setSubtitleInput(v); setAudioUrl(null); }
     setInitResult(null); setShots([]); setMergedVideoUrl(null);
   };
-  // 只在用户切换视频类型那一刻同步一次。若也跟着 script 变化跑，会把分镜导入
-  // 写进 subtitleInput 的字幕又覆盖掉；日常输入由 setConceptText 负责镜像。
-  //   解说纪录片 → 这份文本就是字幕
-  //   叙事短片   → 字幕为空，交给后端按脚本自动生成
-  // generate_audio 同理：叙事短片的人声是 Seedance 按 prompt 里的对白生成的，必须开；
-  // 解说纪录片的成品音轨来自 Azure 旁白，视频自带音频用不上，开了是白花钱。
-  // 只认用户操作，不在首次挂载时跑，否则会清掉从库里读出来的字幕和参数。
-  const prevVideoTypeRef = useRef(videoType);
-  useEffect(() => {
-    const prev = prevVideoTypeRef.current;
-    if (prev === videoType) return;
-    prevVideoTypeRef.current = videoType;
-    setSubtitleInput(videoType === 'narration' ? script : '');
-    setGenerateAudio(videoType !== 'narration');
-    setAudioUrl(null);
-  }, [videoType, script]);
 
   // 角色/素材上下文。两条分镜链路共用同一份 @图片N 编号 —— 各算各的迟早漂移，
   // 编号一错，提示词里的角色锚定就指到别的图上去了。
   const subjectContext = useMemo(
     () => buildSubjectContext(videoSubjects, mediaItems, scriptAnalysis),
     [videoSubjects, mediaItems, scriptAnalysis]);
+
+  // 参考素材还能加几个。图片额度是**整条请求**的 9 个，带图角色的头像提交时排在参考素材
+  // 前面、同样占 image_url 名额，所以这里要先扣掉；视频/音频没有别的来源，直接是 3。
+  const subjectImageCount = videoSubjects.filter(s => s.image_url).length;
+  const mediaLimit = (t: 'image' | 'video' | 'audio') =>
+    t === 'image' ? Math.max(0, MEDIA_CAPS.image - subjectImageCount) : MEDIA_CAPS[t];
 
   // 方舟体验中心的预设音色（80 条）。文件托管在火山的公开 TOS 上，选中直接把地址
   // 塞进参考素材 —— 不用下载转存，编号照常按参考素材的顺序排。
@@ -1311,8 +1414,9 @@ export default function VoiceoverPage() {
   // 参考素材列表用的副本：非图片素材的缩略图在这里解析。
   // 原来重开页面时所有素材的 previewUrl 都被设成了 url，等于把 mp3 塞进 <img> —— 裂图。
   const mediaItemsForPanel = useMemo(() => mediaItems.map(m => {
-    if (m.mediaType === 'image') return m;                       // 图片自己就是缩略图
-    const thumb = presetThumbByUrl.get(m.url || '')
+    if (m.mediaType === 'image') return m.previewUrl ? m : { ...m, previewUrl: m.url };   // 图片自己就是缩略图
+    // 存量素材存的是 %XX 转义过的地址（预设库现在给的是中文），查表前先归一
+    const thumb = presetThumbByUrl.get(prettyUrl(m.url || ''))
       || (m.mediaType === 'video' && m.url?.includes('tos-cn-beijing')
         ? `${m.url}?x-tos-process=video/snapshot,t_0,h_600` : '');
     return { ...m, previewUrl: thumb || undefined };             // 没缩略图就退回图标
@@ -1322,6 +1426,7 @@ export default function VoiceoverPage() {
   const [libOpen, setLibOpen] = useState(false);
   const [libTab, setLibTab] = useState<'video' | 'audio' | 'image'>('video');
   const [libQuery, setLibQuery] = useState('');
+  const [libUrlInput, setLibUrlInput] = useState('');
 
   // 已上传好的参考音频 —— 顺序就是提示词里 @音频N 的编号（全片不可重排）
   const audioItems = useMemo(
@@ -1334,9 +1439,9 @@ export default function VoiceoverPage() {
   // 编号仍按参考素材里同类型的顺序排（@视频N / @音频N / @图片N）。
   function addPresetMedia(mediaType: 'image' | 'video' | 'audio', preset: { name: string; category?: string; url: string }) {
     setMediaItems(prev => {
-      if (prev.some(m => m.url === preset.url)) return prev;      // 同一条只占一个编号
-      if (prev.filter(m => m.mediaType === mediaType).length >= MEDIA_LIMITS[mediaType]) {
-        setUploadError(`${MEDIA_ZH[mediaType]}最多 ${MEDIA_LIMITS[mediaType]} 个，先删掉一个再选`);
+      if (prev.some(m => prettyUrl(m.url || '') === preset.url)) return prev;   // 同一条只占一个编号
+      if (prev.filter(m => m.mediaType === mediaType).length >= mediaLimit(mediaType)) {
+        setUploadError(`${MEDIA_ZH[mediaType]}最多 ${mediaLimit(mediaType)} 个，先删掉一个再选`);
         return prev;
       }
       return [...prev, {
@@ -1348,6 +1453,61 @@ export default function VoiceoverPage() {
         description: `预设素材：${preset.category ? preset.category + '·' : ''}${preset.name}`,
       }];
     });
+  }
+
+  // 路径里的中文以 %XX 形式粘进来（%E5%9B%BE%E7%89%87 = 图片），存库、拼提示词、
+  // 显示在素材列表上都是一长串转义。逐段解回中文，**留在 JSON 里的地址不带百分号转义** ——
+  // 只动 path，query 原样保留（签名串里的 %2F 之类有语义）。解开后 trim：清单里那条
+  // `%20华尔兹.mp4` 去掉前导空格取到的是同一个对象，而裸空格的 URL 谁都用不了。
+  // trim 完仍含空格/#/?/%//\ 的段退回原样。后端 lib/materials.js 是同一条规则。
+  function prettyUrl(url: string): string {
+    const q = url.indexOf('?');
+    const head = q < 0 ? url : url.slice(0, q);
+    const tail = q < 0 ? '' : url.slice(q);
+    const pretty = head.split('/').map(seg => {
+      try {
+        const dec = decodeURIComponent(seg).trim();
+        return dec && !/[\s#?%/\\]/.test(dec) ? dec : seg;
+      } catch { return seg; }
+    }).join('/');
+    return pretty + tail;
+  }
+
+  // 链接最后一段路径 → 文件名。用 decodeURIComponent（不是 unescape/escape）
+  // 按 UTF-8 解码 %XX，中文文件名才不会变成乱码。解不出来就把原串照原样退回。
+  function fileNameFromUrl(url: string): string {
+    try {
+      const path = new URL(url).pathname;
+      const seg = path.split('/').filter(Boolean).pop() || url;
+      try { return decodeURIComponent(seg); } catch { return seg; }
+    } catch {
+      return url;
+    }
+  }
+
+  // 素材库浮窗里「粘贴链接」直接加一条外部素材 —— 不进预设库，地址原样交给 Seedance。
+  function addUrlMedia(mediaType: 'image' | 'video' | 'audio', rawUrl: string) {
+    const url = prettyUrl(rawUrl.trim());
+    if (!/^https?:\/\//i.test(url)) {
+      setUploadError('请粘贴以 http(s):// 开头的完整链接');
+      return;
+    }
+    setMediaItems(prev => {
+      if (prev.some(m => m.url === url)) return prev;
+      if (prev.filter(m => m.mediaType === mediaType).length >= mediaLimit(mediaType)) {
+        setUploadError(`${MEDIA_ZH[mediaType]}最多 ${mediaLimit(mediaType)} 个，先删掉一个再选`);
+        return prev;
+      }
+      const name = fileNameFromUrl(url);
+      return [...prev, {
+        uid: `url-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        mediaType,
+        url,
+        name,
+        description: `外部链接素材：${name}`,
+      }];
+    });
+    setLibUrlInput('');
   }
 
   // 让音频编号跟着角色编号走：@图片1 的角色，音色就排成 @音频1。
@@ -1502,9 +1662,22 @@ export default function VoiceoverPage() {
     }
   }
 
+  // 换头像只给认证资源——真人头像走 /assets/real 同一套逻辑（LivenessFace，只能经活体验证入库），
+  // 虚拟头像走 /assets/virtual 同一套逻辑（AIGC）。刷新按钮和首次加载共用这一个函数。
+  async function refreshAvatars() {
+    setAvatarLoading(true);
+    try {
+      const [real, virtual] = await Promise.all([loadVerifiedAvatars('LivenessFace'), loadVerifiedAvatars('AIGC')]);
+      setRealAvatars(real);
+      setVirtualAvatars(virtual);
+    } finally {
+      setAvatarLoading(false);
+    }
+  }
+
   // ─── Load video data from API ─────────────────────────────────────────────
   useEffect(() => {
-    fetch('/avatars/index.json').then(r => r.json()).then((data: AvatarItem[]) => setAvatars(data.reverse())).catch(() => {});
+    refreshAvatars();
 
     if (projectId) {
       api.get<any>(`/projects/${projectId}`).then(p => { if (p?.name) setProjectName(p.name); }).catch(() => {});
@@ -1528,7 +1701,11 @@ export default function VoiceoverPage() {
           if (data.params) {
             if (data.params.model) setModel(data.params.model);
             if (data.params.resolution) setResolution(data.params.resolution);
-            if (data.params.generateAudio !== undefined) setGenerateAudio(data.params.generateAudio);
+            // 音频**只认 true，false 不采信**：这个页面只做叙事短片，人声就是 Seedance
+            // 按 prompt 里的对白生成的，关掉等于交付哑画面。库里的 false 基本都是
+            // 解说纪录片时代（旁白走 Azure、视频自带音频用不上）留下的残留，
+            // 照读回来就是每次重开都默认关。本轮里仍然可以手动关，只是不会跨刷新保留。
+            if (data.params.generateAudio) setGenerateAudio(true);
             if (data.params.watermark !== undefined) setWatermark(data.params.watermark);
             if (data.params.serviceTier) setServiceTier(data.params.serviceTier);
             if (data.params.webSearch !== undefined) setWebSearch(data.params.webSearch);
@@ -1540,20 +1717,7 @@ export default function VoiceoverPage() {
             if (Array.isArray(data.params.scriptAnalysis) && data.params.scriptAnalysis.length > 0) {
               setScriptAnalysis(data.params.scriptAnalysis);
             }
-            // 视频类型也要恢复 —— 不存的话重开永远回到叙事短片，而 generateAudio
-            // 却从库里读了出来，两者就对不上了。老数据没存过这个字段，按 subtitle_input
-            // 反推（解说纪录片的字幕就是那份文本，叙事短片的字幕为空）。
-            const savedType: 'story' | 'narration' =
-              data.params.videoType === 'story' || data.params.videoType === 'narration'
-                ? data.params.videoType
-                : ((data.subtitle_input || '').trim() ? 'narration' : 'story');
-            setVideoType(savedType);
-            // 同步 ref，否则恢复类型会被当成「用户切换」，把刚读出来的字幕清掉
-            prevVideoTypeRef.current = savedType;
-            // 老数据里的 generateAudio 是当年的默认值留下的（那时默认 false），
-            // 和视频类型对不上就以类型为准：叙事短片的人声来自 Seedance 按对白生成，
-            // 关掉只会得到哑画面。存过 videoType 的行说明是新数据，尊重用户的开关。
-            if (data.params.videoType === undefined) setGenerateAudio(savedType !== 'narration');
+            if (data.params.dialogueScript) setDialogueScript(data.params.dialogueScript);
           }
           if (data.seed != null) { batchSeedRef.current = data.seed; setSeed(data.seed); }
           // Load shots from DB
@@ -1598,7 +1762,11 @@ export default function VoiceoverPage() {
             const restoredTasks: Record<number, ShotTask> = {};
             loadedShots.forEach((s, i) => {
               if (s.task_id || s.task_status !== 'idle') {
-                restoredTasks[i] = { shotIndex: i, taskId: s.task_id || null, status: s.task_status || 'idle', videoUrl: s.video_url || null, localUrl: s.local_url || null, duration: s.video_duration || null, error: s.task_error || null, submitting: false };
+                // startedAt 用 shots.updated_at 近似 —— 还在跑的任务，最后一次写库就是提交那一次。
+                // 取不到就当此刻开始算，宁可晚一点放出「重新生成」，也不要一刷新就怂恿重开。
+                const rawUpdated = data.shots[i]?.updated_at;
+                const startedAt = rawUpdated ? Date.parse(rawUpdated) : Date.now();
+                restoredTasks[i] = { shotIndex: i, taskId: s.task_id || null, status: s.task_status || 'idle', videoUrl: s.video_url || null, localUrl: s.local_url || null, duration: s.video_duration || null, error: s.task_error || null, submitting: false, startedAt: Number.isFinite(startedAt) ? startedAt : Date.now() };
               }
             });
             setTasks(restoredTasks);
@@ -1653,7 +1821,7 @@ export default function VoiceoverPage() {
     if (!dataLoaded || !videoId) return;
     setVideoDirty(true);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [script, subtitleInput, style, ratio, voice, model, resolution, generateAudio, watermark, seed, serviceTier, returnLastFrame, draft, webSearch, videoType, subtitleStyle, banner, bannerStyle, videoSubjects, mediaItems]);
+  }, [script, subtitleInput, style, ratio, voice, model, resolution, generateAudio, watermark, seed, serviceTier, returnLastFrame, draft, webSearch, subtitleStyle, banner, bannerStyle, videoSubjects, mediaItems, dialogueScript]);
 
   function markShotDirty(idx: number) {
     setDirtyShotIdxs(prev => new Set(prev).add(idx));
@@ -1668,7 +1836,7 @@ export default function VoiceoverPage() {
       if (videoDirty) {
         Object.assign(payload, { script, subtitle_input: subtitleInput, style, ratio, voice });
       }
-      payload.params = { model, resolution, generateAudio, watermark, seed, serviceTier, returnLastFrame, draft, webSearch, videoType, subtitleStyle, banner, bannerStyle, scriptAnalysis: scriptAnalysis.map(s => ({ label: s.label, type: s.type, appearance: s.appearance, personality: s.personality, linkedSubjectId: s.linkedSubjectId, linkedAudioUrl: s.linkedAudioUrl })) };
+      payload.params = { model, resolution, generateAudio, watermark, seed, serviceTier, returnLastFrame, draft, webSearch, subtitleStyle, banner, bannerStyle, dialogueScript, scriptAnalysis: scriptAnalysis.map(s => ({ label: s.label, type: s.type, appearance: s.appearance, personality: s.personality, linkedSubjectId: s.linkedSubjectId, linkedAudioUrl: s.linkedAudioUrl })) };
       payload.subject_ids = videoSubjects.map(s => s.id);
       payload.media_items = mediaItems.map(m => ({ media_type: m.mediaType, url: m.url, name: m.name, description: m.description }));
       promises.push(api.put(`/videos/${videoId}`, payload).catch(() => {}));
@@ -1718,6 +1886,12 @@ export default function VoiceoverPage() {
   useEffect(() => () => {
     Object.values(pollRefs.current).forEach(clearInterval);
   }, []);
+
+  useEffect(() => {
+    if (!Object.values(tasks).some(t => t.taskId && !TERMINAL.has(t.status))) return;
+    const id = setInterval(() => setTaskNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [tasks]);
 
   // Auto-update shot prompts when subject definitions change
   useEffect(() => {
@@ -1781,7 +1955,14 @@ export default function VoiceoverPage() {
           return prev;
         });
       }
-    } catch (e) { console.error('[poll]', e); }
+    } catch (e) {
+      // 查询失败不改状态（任务本身可能好好的），但要**显示出来** —— 以前只 console.error，
+      // 后端一报错（例如重启后丢了 provider）页面就只剩一个转圈的「队列中」，
+      // 看不出是查询挂了还是真在排队。下一次查成功会把这条错误清掉（d.error 为 null）
+      console.error('[poll]', e);
+      const msg = e instanceof Error ? e.message : '查询失败';
+      setTasks(prev => prev[idx] ? { ...prev, [idx]: { ...prev[idx], error: `查询任务状态失败：${msg}` } } : prev);
+    }
   }, []);
 
   async function addFiles(files: File[]) {
@@ -1803,7 +1984,7 @@ export default function VoiceoverPage() {
         } catch { rejected.push(`${f.name}（无法读取视频信息）`); continue; }
       }
       const currentCount = mediaItems.filter(m => m.mediaType === mediaType).length + batchCount[mediaType];
-      if (currentCount >= MEDIA_LIMITS[mediaType]) continue;
+      if (currentCount >= mediaLimit(mediaType)) continue;
       batchCount[mediaType]++;
       const uid = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       const item: MediaItem = { uid, mediaType, mimeType: f.type, name: f.name, uploading: true, uploadProgress: 0, ...(mediaType === 'image' ? { previewUrl: URL.createObjectURL(f) } : {}) };
@@ -1859,33 +2040,207 @@ export default function VoiceoverPage() {
   }
 
 
+  // 轮询「剧本分析」的流式任务：每 1s 拿一次累计文本直接怼进 dialogueScript ——
+  // 复用的是显示/编辑对白剧本的同一个状态、同一个框，不用另开一个「预览」框。
+  // 不做 storyboard 那套 localStorage 断线重连：这个操作短，用户就在当前页面等着，
+  // 断了大不了重新点一次。
+  function pollAnalyzeScriptJob(jobId: string) {
+    if (scriptJobPollRef.current) clearInterval(scriptJobPollRef.current);
+    let settled = false;
+    return new Promise<void>(resolve => {
+      const tick = async () => {
+        if (settled) return;
+        try {
+          const d = await api.get<{
+            status: string; stage?: string; script?: string;
+            subjects?: Array<{ label: string; type: string; appearance: string; personality: string }>;
+            error?: string;
+          }>(`/voiceover/analyze-script-status/${jobId}`);
+          if (settled) return;
+          if (d.script !== undefined) setDialogueScript(d.script);
+          if (d.status === 'processing') return;
+          settled = true;
+          if (scriptJobPollRef.current) { clearInterval(scriptJobPollRef.current); scriptJobPollRef.current = null; }
+          if (d.status === 'done') {
+            setScriptAnalysis((d.subjects || []).map(s => ({ ...s, linkedSubjectId: undefined })));
+          } else {
+            setScriptAnalysisError(d.error || (d.status === 'expired' ? '任务已过期' : '分析失败'));
+          }
+          resolve();
+        } catch (e) {
+          // 轮询本身失败（断网之类）不放弃——任务在后端照跑，下一次 tick 再试
+          console.warn('analyze-script poll failed:', e);
+        }
+      };
+      tick();
+      scriptJobPollRef.current = setInterval(tick, 1000);
+    });
+  }
+
   async function handleAnalyzeScript() {
     const text = script.trim() || subtitleInput.trim();
     if (!text) return;
     setAnalyzingScript(true);
     setScriptAnalysisError('');
+    setDialogueScript('');   // 清空重新流式填，不然旧剧本会先跟新的叠一下再跳变
     try {
       const oldLinkedIds = scriptAnalysis.filter(s => s.linkedSubjectId).map(s => s.linkedSubjectId!);
       if (oldLinkedIds.length > 0) {
         setVideoSubjects(prev => prev.filter(vs => !oldLinkedIds.includes(vs.id)));
       }
-      const result = await api.post<{ subjects: Array<{ label: string; type: string; appearance: string; personality: string }> }>('/voiceover/analyze-script', { script: text });
-      setScriptAnalysis((result.subjects || []).map(s => ({ ...s, linkedSubjectId: undefined })));
+      // 后端现在先流式写一遍完整对白剧本、再从剧本里提取角色（比直接分析概念描述提取得准），
+      // 顺带把「专业分镜生成」浮窗里已经填的创作目标/受众/基调/核心信息/总时长带过去，
+      // 和「生成分镜脚本」第一步用的是同一套上下文
+      const { jobId } = await api.post<{ jobId: string }>('/voiceover/analyze-script-async', {
+        script: text,
+        creative_goal:   sbSettings.creativeGoal,
+        target_audience: sbSettings.audience,
+        overall_tone:    sbSettings.tone,
+        key_messages:    sbSettings.keyMessages,
+        duration_total:  sbSettings.durationTotal,
+      });
+      await pollAnalyzeScriptJob(jobId);
     } catch (err) {
       setScriptAnalysisError(err instanceof Error ? err.message : '分析失败');
+      // 剧本写完了，只是角色提取（后一步、更便宜的那次调用）挂了——剧本不该跟着白写一遍
+      if (err instanceof ApiError && err.data && typeof (err.data as any).script === 'string') {
+        setDialogueScript((err.data as any).script);
+      }
     } finally { setAnalyzingScript(false); }
   }
 
-  function linkAnalysisSubject(analysisIdx: number, subjectId: string) {
+  // 轮询「AI改写」的流式任务，和 pollAnalyzeScriptJob 同一套路，只是结果写进
+  // rewritePreview（浮窗里的预览框）而不是直接改 dialogueScript ——改写有可能跑偏，
+  // 改完之前不能覆盖正文，用户看完预览才点「采用」。
+  function pollRewriteScriptJob(jobId: string) {
+    if (rewriteJobPollRef.current) clearInterval(rewriteJobPollRef.current);
+    let settled = false;
+    return new Promise<void>(resolve => {
+      const tick = async () => {
+        if (settled) return;
+        try {
+          const d = await api.get<{ status: string; script?: string; error?: string }>(`/voiceover/rewrite-script-status/${jobId}`);
+          if (settled) return;
+          if (d.script !== undefined) setRewritePreview(d.script);
+          if (d.status === 'processing') return;
+          settled = true;
+          if (rewriteJobPollRef.current) { clearInterval(rewriteJobPollRef.current); rewriteJobPollRef.current = null; }
+          if (d.status !== 'done') {
+            setRewriteError(d.error || (d.status === 'expired' ? '任务已过期' : '改写失败'));
+          }
+          resolve();
+        } catch (e) {
+          // 轮询本身失败（断网之类）不放弃——任务在后端照跑，下一次 tick 再试
+          console.warn('rewrite-script poll failed:', e);
+        }
+      };
+      tick();
+      rewriteJobPollRef.current = setInterval(tick, 1000);
+    });
+  }
+
+  async function handleRewriteScript() {
+    const instruction = rewriteInstruction.trim();
+    if (!instruction || !dialogueScript.trim()) return;
+    setRewritingScript(true);
+    setRewriteError('');
+    setRewritePreview('');
+    try {
+      const { jobId } = await api.post<{ jobId: string }>('/voiceover/rewrite-script-async', {
+        script: dialogueScript,
+        instruction,
+      });
+      await pollRewriteScriptJob(jobId);
+    } catch (err) {
+      setRewriteError(err instanceof Error ? err.message : '改写失败');
+    } finally { setRewritingScript(false); }
+  }
+
+  function applyRewrittenScript() {
+    setDialogueScript(rewritePreview);
+    setRewriteOpen(false);
+    setRewriteInstruction('');
+    setRewritePreview('');
+    setRewriteError('');
+  }
+
+  function closeRewriteModal() {
+    if (rewritingScript) return;   // 改写中不许关——关了任务还在后台跑，预览却没地方接
+    setRewriteOpen(false);
+    setRewriteError('');
+  }
+
+  // 角色卡的字段改动统一走这里 —— setScriptAnalysis 之外还要 setVideoDirty，
+  // 不然顶部那个「保存」按钮不出来，改完刷新就没了（scriptAnalysis 落在 videos.params 里）
+  function patchAnalysis(idx: number, patch: Partial<AnalysisItem>) {
+    setScriptAnalysis(prev => prev.map((a, i) => i === idx ? { ...a, ...patch } : a));
+    setVideoDirty(true);
+  }
+
+  function linkAnalysisSubject(analysisIdx: number, subjectId: string, subjectsOverride?: ProjectSubject[]) {
     // Update scriptAnalysis link
     const newAnalysis = scriptAnalysis.map((s, i) => i === analysisIdx ? { ...s, linkedSubjectId: subjectId } : s);
     setScriptAnalysis(newAnalysis);
     // Rebuild videoSubjects in scriptAnalysis order (allow duplicates)
+    const subjectsPool = subjectsOverride || projectSubjects;
     const orderedSubs = newAnalysis
       .filter(a => a.linkedSubjectId)
-      .map(a => projectSubjects.find(ps => ps.id === a.linkedSubjectId))
+      .map(a => subjectsPool.find(ps => ps.id === a.linkedSubjectId))
       .filter(Boolean) as ProjectSubject[];
     setVideoSubjects(orderedSubs);
+  }
+
+  // 项目是**懒建**的（handleInit 生成分镜那一刻才 POST /projects），但换头像可能发生在那之前：
+  // 新开页面 → 剧本分析 → 直接给角色换头像。所以这里要能自己把项目建出来 ——
+  // 原来 `if (!projectId) return` 让这条最常见的路径点下去一点反应都没有（不报错、不关浮窗）。
+  // 并发点两张头像只建一个项目：把在建的 promise 记在 ref 上，后来者等同一个。
+  const projectCreateRef = useRef<Promise<string> | null>(null);
+  async function ensureProject(): Promise<string> {
+    if (projectId) return projectId;
+    if (projectCreateRef.current) return projectCreateRef.current;
+    const autoName = (script.trim() || subtitleInput.trim()).slice(0, 30) || '未命名视频';
+    projectCreateRef.current = (async () => {
+      const proj = await api.post<{ id: string }>('/projects', { name: autoName });
+      setProjectId(proj.id);
+      setProjectName(autoName);
+      window.history.replaceState(null, '', `/voiceover-v3?projectId=${proj.id}${videoId ? `&videoId=${videoId}` : ''}`);
+      return proj.id;
+    })();
+    try {
+      return await projectCreateRef.current;
+    } catch (err) {
+      projectCreateRef.current = null;      // 失败了下次还能再试
+      throw err;
+    }
+  }
+
+  // 认证资源里的头像不是项目自带主体——选中时先落成一个 project_subjects 再走既有的绑定流程。
+  // **同一个 Asset ID 在一个项目里只建一行**：这个函数原来每点一次「换头像」就 POST 一条新主体，
+  // 换来换去项目角色列表就堆成十几个同名同图的重复项（还都占着 @图片N 的候选位）。
+  async function assignAssetAvatar(analysisIdx: number, asset: RemoteAsset) {
+    try {
+      const pid = await ensureProject();
+      const exist = projectSubjects.find(s => s.asset_id === asset.Id);
+      if (exist) {
+        linkAnalysisSubject(analysisIdx, exist.id, projectSubjects);
+        return;
+      }
+      const thumb = asset.PreviewUrl || asset._thumbnail_url || asset.URL || '';
+      const newSub = await api.post<ProjectSubject>(`/projects/${pid}/subjects`, {
+        // 角色名优先用这张角色卡的名字（「陈雅」），实在没有才退回素材名 ——
+        // 素材名往往是 `微信图片_2026….jpg` 这种文件名，拿它当角色名没有意义
+        label: (scriptAnalysis[analysisIdx]?.label || '').trim() || displayLabel(asset.Name) || `${avatarPickerTab === 'real' ? '真人' : '虚拟'}头像`,
+        image_url: thumb,
+        asset_id: asset.Id,
+      });
+      setProjectSubjects(prev => [...prev, newSub]);
+      linkAnalysisSubject(analysisIdx, newSub.id, [...projectSubjects, newSub]);
+    } catch (err) {
+      alert(`添加头像失败：${err instanceof Error ? err.message : '请重试'}`);
+    } finally {
+      setAvatarPickerIdx(null);
+      setAvatarSearch('');
+    }
   }
 
   async function handleAnalyzeSubjects() {
@@ -1903,6 +2258,21 @@ export default function VoiceoverPage() {
     } finally { setAnalyzingSubjects(false); }
   }
 
+  // 生成分镜是一次几十秒的付费长任务；重新生成还会先 DELETE 掉这条视频的全部分镜
+  // 再插新的（见 finishStoryboard），已经生成好的分镜视频跟着一起没了 —— 都先问一句
+  function handleInitClick() {
+    if (initResult) {
+      const done = shots.filter(s => s.video_url || s.local_url).length;
+      const msg = '重新生成会用新的分镜脚本覆盖现在这 ' + shots.length + ' 个分镜'
+        + (done > 0 ? '，其中 ' + done + ' 个已生成的分镜视频也会一并清掉' : '')
+        + '，且无法撤销。确定继续？';
+      if (!confirm(msg)) return;
+    } else if (!confirm('开始生成分镜脚本？这一步要跑几十秒。')) {
+      return;
+    }
+    handleInit();
+  }
+
   async function handleInit() {
     if (!script.trim() && !subtitleInput.trim()) return;
     setInitError(''); setIniting(true); setInitElapsed(0);
@@ -1915,12 +2285,12 @@ export default function VoiceoverPage() {
     try {
       // 没人工绑音色的角色，这里按性别年龄从预设库挑一条钉死 —— 同一个角色全片同一把嗓子，
       // 靠的是「一条固定的参考音频」，不是让模型每镜自己写英文音色描述。
-      // 上限内挑不完就只配前几个（音频最多 MEDIA_LIMITS.audio 条），其余退回音色描述。
+      // 上限内挑不完就只配前几个（音频最多 MEDIA_CAPS.audio 条），其余退回音色描述。
       let nextAnalysis = scriptAnalysis;
       let nextMedia = mediaItems;
       if (voicePresets.length > 0 && scriptAnalysis.some(a => !a.linkedAudioUrl)) {
         const taken = new Set(scriptAnalysis.map(a => a.linkedAudioUrl).filter(Boolean) as string[]);
-        let audioSlots = MEDIA_LIMITS.audio - nextMedia.filter(m => m.mediaType === 'audio').length;
+        let audioSlots = mediaLimit('audio') - nextMedia.filter(m => m.mediaType === 'audio').length;
         const added: MediaItem[] = [];
         nextAnalysis = scriptAnalysis.map((a, i) => {
           if (a.linkedAudioUrl || audioSlots <= 0) return a;
@@ -1971,12 +2341,14 @@ export default function VoiceoverPage() {
         shot_count:          sbSettings.shotCount,
         duration_total:      sbSettings.durationTotal,
         narrative_structure: sbSettings.narrative,
-        video_type:          videoType,
+        video_type:          'story',
         ratio,                              // 画幅决定装载竖屏还是横屏那套手艺
         style,                              // 视觉风格，不发过去模型会跟着参考图漂
         subject_definitions: finalSubjectDefs,
         image_descriptions:  imageDescriptions || '',
         voice_bindings:      finalVoiceBindings || undefined,   // 人工绑的 + 刚自动配的
+        // 「剧本分析」已经写过对白剧本就直接带上——后端跳过第一步，不用重写一遍
+        script:              dialogueScript.trim() || undefined,
       });
       await pollStoryboardJob(jobId);
     } catch (err) {
@@ -1990,6 +2362,20 @@ export default function VoiceoverPage() {
   // 改成后端任务：提交拿 jobId，本地记一笔，轮询取结果 —— 回到页面能接着取。
   const SB_JOB_KEY = 'voiceover-v3:sb-job';
   const sbPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const dialogueScriptBoxRef = useRef<HTMLTextAreaElement>(null);
+  const scriptJobPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const rewriteJobPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const rewritePreviewBoxRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (rewritingScript && rewritePreviewBoxRef.current) {
+      rewritePreviewBoxRef.current.scrollTop = rewritePreviewBoxRef.current.scrollHeight;
+    }
+  }, [rewritePreview, rewritingScript]);
+  useEffect(() => {
+    if (analyzingScript && dialogueScriptBoxRef.current) {
+      dialogueScriptBoxRef.current.scrollTop = dialogueScriptBoxRef.current.scrollHeight;
+    }
+  }, [dialogueScript, analyzingScript]);
 
   async function startStoryboardJob(payload: Record<string, unknown>) {
     const { jobId } = await api.post<{ jobId: string }>('/prompt/storyboard-async', payload);
@@ -2005,18 +2391,37 @@ export default function VoiceoverPage() {
   }
 
   // 轮询到结束为止。resumed=true 表示是回到页面接着取的，文案不一样。
+  //
+  // 取结果的接口不删任务（刷新页面要能重新拿到），所以同一个 jobId 可能被连续两次 tick
+  // 都问到 status:'done' —— setInterval 不等上一次 tick 的 await 完成就会按时再开一次，
+  // 如果上一次的 /storyboard-status 响应慢（分镜生成现在两步走，接近结束时后端负载也高），
+  // 下一次 tick 会在它还没跑完 finishStoryboard 时就已经发出请求、也拿到 done。两次都会走
+  // finishStoryboard，各自删一遍旧分镜、建一遍新分镜——页面拿着第一批的 shot id 提交生成，
+  // 一提交就 404（分镜早被第二批换掉了）。用 settled 挡住第二次，谁先问到非 processing 谁赢。
   function pollStoryboardJob(jobId: string, resumed = false) {
     setIniting(true);
     if (resumed) setInitError('');
+    if (!resumed) { setSbStage(''); setSbScript(''); }
     if (sbPollRef.current) clearInterval(sbPollRef.current);
+    let settled = false;
     return new Promise<void>(resolve => {
       const tick = async () => {
+        if (settled) return;
         try {
-          const d = await api.get<{ status: string; result?: Storyboard; error?: string; elapsed?: number }>(
+          const d = await api.get<{ status: string; result?: Storyboard; error?: string; elapsed?: number; stage?: string; script?: string }>(
             `/prompt/storyboard-status/${jobId}`);
-          if (d.status === 'processing') { setInitElapsed(d.elapsed ?? 0); return; }
+          if (settled) return;   // 另一次没赶上的 tick 已经处理过这个任务了
+          if (d.status === 'processing') {
+            setInitElapsed(d.elapsed ?? 0);
+            if (d.stage === 'script' || d.stage === 'shots') setSbStage(d.stage);
+            if (d.script !== undefined) setSbScript(d.script);
+            return;
+          }
+          settled = true;
+          if (sbPollRef.current) { clearInterval(sbPollRef.current); sbPollRef.current = null; }
           clearStoryboardJob();
           if (d.status === 'done' && d.result) {
+            if (d.result.script) setSbScript(d.result.script);
             try { await finishStoryboard(d.result); }
             catch (e) { setInitError(e instanceof Error ? e.message : '分镜处理失败'); }
           } else {
@@ -2048,12 +2453,18 @@ export default function VoiceoverPage() {
   }, [dataLoaded]);
 
   useEffect(() => () => { if (sbPollRef.current) clearInterval(sbPollRef.current); }, []);
+  useEffect(() => () => { if (scriptJobPollRef.current) clearInterval(scriptJobPollRef.current); }, []);
+  useEffect(() => () => { if (rewriteJobPollRef.current) clearInterval(rewriteJobPollRef.current); }, []);
 
-  // 拿到分镜结果之后的全部后处理：转成 shots、（解说纪录片）配音、落库。
+  // 拿到分镜结果之后的全部后处理：转成 shots、落库。
   // 抽出来是因为异步任务的结果可能是**回到页面时**才取到的，那时 handleInit 早就退出了。
   async function finishStoryboard(sbResult: Storyboard) {
-    const drafts = toShotDrafts(sbResult, videoType);
+    const drafts = toShotDrafts(sbResult, 'story');
     if (drafts.length === 0) throw new Error('模型没有返回任何分镜');
+    // 没提前做「剧本分析」时，后端这一步自己写了剧本——同步回来，和分析按钮写的一视同仁，
+    // 都要能在页面看到、都要存进 params
+    const finalDialogueScript = sbResult.script?.trim() || dialogueScript;
+    if (sbResult.script?.trim()) setDialogueScript(sbResult.script);
 
     const result: InitResult = {
       autoShotCount: drafts.length,
@@ -2091,31 +2502,8 @@ export default function VoiceoverPage() {
     }
     batchSeedRef.current = seed ?? Math.floor(Math.random() * 2147483647);
 
-    // TTS: 生成语音并按实际时长更新各分镜 duration。
-    // 只有解说纪录片走这条 —— 叙事短片的人声是 Seedance 按 prompt 里的对白生成的，
-    // 再叠一条 Azure 旁白会把角色说话盖掉，分镜时长也照模型给的走。
-    const ttsScript = videoType === 'narration'
-      ? (subtitleInput.trim() || result.shots.map(s => s.subtitle).join(''))
-      : '';
-    let ttsAudioUrl: string | null = null;
-    if (ttsScript) {
-      setTtsLoading(true);
-      try {
-        const ttsRes = await api.post<{ audioUrl: string; totalDuration: number; shotDurations: number[]; totalVideoDuration: number; wordBoundaries?: Array<{text: string; offset: number; duration: number}> }>('/voiceover/tts', {
-          script: ttsScript, voice, shots: result.shots.map(s => ({ subtitle: s.subtitle, duration: s.duration, voice_style: s.voice_style })),
-        });
-        setAudioUrl(ttsRes.audioUrl);
-        setAudioDuration(ttsRes.totalDuration);
-        if (ttsRes.wordBoundaries) setWordBoundaries(ttsRes.wordBoundaries);
-        ttsAudioUrl = ttsRes.audioUrl;
-        const updatedShots = result.shots.map((s, i) => ({ ...s, duration: ttsRes.shotDurations[i] ?? s.duration }));
-        setShots(updatedShots);
-        result.shots = updatedShots;
-        result.totalVideoDuration = ttsRes.totalVideoDuration;
-      } catch (e) {
-        console.warn('TTS failed, using estimated durations:', e);
-      } finally { setTtsLoading(false); }
-    }
+    // 叙事短片的人声是 Seedance 按 prompt 里的对白生成的，分镜时长照模型给的走，不需要 TTS。
+    const ttsAudioUrl: string | null = null;
 
     // ─── Save to project/video/shots DB ─────────────────────────────
     let vid = videoId;
@@ -2126,21 +2514,21 @@ export default function VoiceoverPage() {
       const proj = await api.post<{ id: string }>('/projects', { name: autoName });
       setProjectId(proj.id);
       // Create video
-      const video = await api.post<{ id: string }>(`/projects/${proj.id}/videos`, { name: autoName, script: script.trim(), subtitle_input: subtitleInput.trim(), style, ratio, voice, seed: batchSeedRef.current, params: { model, resolution, generateAudio, watermark, seed: batchSeedRef.current, serviceTier, priority, returnLastFrame, draft, webSearch, videoType } });
+      const video = await api.post<{ id: string }>(`/projects/${proj.id}/videos`, { name: autoName, script: script.trim(), subtitle_input: subtitleInput.trim(), style, ratio, voice, seed: batchSeedRef.current, params: { model, resolution, generateAudio, watermark, seed: batchSeedRef.current, serviceTier, priority, returnLastFrame, draft, webSearch, dialogueScript: finalDialogueScript } });
       vid = video.id;
       setVideoId(vid);
       setVideoName(autoName);
       window.history.replaceState(null, '', `/voiceover-v3?projectId=${proj.id}&videoId=${vid}`);
     } else if (!vid) {
       // Create video in existing project
-      const video = await api.post<{ id: string }>(`/projects/${projectId}/videos`, { name: autoName, script: script.trim(), subtitle_input: subtitleInput.trim(), style, ratio, voice, seed: batchSeedRef.current, params: { model, resolution, generateAudio, watermark, seed: batchSeedRef.current, serviceTier, priority, returnLastFrame, draft, webSearch, videoType } });
+      const video = await api.post<{ id: string }>(`/projects/${projectId}/videos`, { name: autoName, script: script.trim(), subtitle_input: subtitleInput.trim(), style, ratio, voice, seed: batchSeedRef.current, params: { model, resolution, generateAudio, watermark, seed: batchSeedRef.current, serviceTier, priority, returnLastFrame, draft, webSearch, dialogueScript: finalDialogueScript } });
       vid = video.id;
       setVideoId(vid);
       setVideoName(autoName);
       window.history.replaceState(null, '', `/voiceover-v3?projectId=${projectId}&videoId=${vid}`);
     } else {
       // Update existing video
-      await api.put(`/videos/${vid}`, { script: script.trim(), subtitle_input: subtitleInput.trim(), style, ratio, voice, seed: batchSeedRef.current, audio_url: ttsAudioUrl, params: { model, resolution, generateAudio, watermark, seed: batchSeedRef.current, serviceTier, priority, returnLastFrame, draft, webSearch, videoType } });
+      await api.put(`/videos/${vid}`, { script: script.trim(), subtitle_input: subtitleInput.trim(), style, ratio, voice, seed: batchSeedRef.current, audio_url: ttsAudioUrl, params: { model, resolution, generateAudio, watermark, seed: batchSeedRef.current, serviceTier, priority, returnLastFrame, draft, webSearch, dialogueScript: finalDialogueScript } });
     }
 
     // Save shots to DB — delete existing first, then insert new
@@ -2159,107 +2547,103 @@ export default function VoiceoverPage() {
     }
   }
 
-  async function handleRegenTTS() {
-    const ttsScript = subtitleInput.trim();
-    if (!ttsScript) return;
-    setTtsNotice('');
-    setTtsLoading(true);
-    try {
-      // 已经生成过分镜视频就锁时长：让语音去贴合现成的画面（Azure 在 ±18% 内调语速），
-      // 而不是按新音色重算画面时长 —— 后者会逼着把分镜视频重做一遍。
-      const hasGenerated = shots.some((_, i) => tasks[i]?.status === 'succeeded');
-      const ttsRes = await api.post<{ audioUrl: string; totalDuration: number; shotDurations: number[]; totalVideoDuration: number; wordBoundaries?: Array<{text: string; offset: number; duration: number}>; overflowShots?: number[] }>('/voiceover/tts', {
-        script: ttsScript, voice, lockDurations: hasGenerated,
-        shots: shots.length > 0 ? shots.map(s => ({ subtitle: s.subtitle, duration: s.duration, voice_style: s.voice_style })) : [{ subtitle: ttsScript }],
-      });
-      setAudioUrl(ttsRes.audioUrl);
-      setAudioDuration(ttsRes.totalDuration);
-      if (ttsRes.wordBoundaries) setWordBoundaries(ttsRes.wordBoundaries);
-      // 换音色后每镜的整数秒会跟着重算（不同音色语速不同），必须写回 shots ——
-      // 否则合并时按旧时长把画面贴齐，而音轨是按新时长拼的，两者会一路错开。
-      if (Array.isArray(ttsRes.shotDurations) && shots.length > 0) {
-        const updated = shots.map((sh, i) => ({ ...sh, duration: ttsRes.shotDurations[i] ?? sh.duration }));
-        setShots(updated);
-        updated.forEach((sh, i) => {
-          if (sh.id && sh.duration !== shots[i].duration) {
-            api.put(`/shots/${sh.id}`, { duration: sh.duration }).catch(() => {});
-          }
-        });
-        // 锁时长模式下画面秒数不变，只有旁白实在塞不进去的镜头才会被顶长（overflowShots）；
-        // 没锁时长（还没生成视频）则按新时长走，不需要提示重做。
-        const overflow = ttsRes.overflowShots || [];
-        setTtsNotice(
-          !hasGenerated
-            ? ''
-            : overflow.length > 0
-              ? `第 ${overflow.join('、')} 镜的旁白装不进现有画面（已放宽语速到 ±18%），`
-                + `建议改短这几镜的旁白，或只重新生成这几镜；其余分镜直接「分镜合并」即可`
-              : '已按现有画面时长重配语音，直接「分镜合并」重新烧录即可，不用重新生成分镜视频'
-        );
+  // 「查看提交 JSON」的默认内容——和 submitShot 里拼 content 的逻辑保持一致，
+  // 没被手改过时框里显示的就是这个；改过之后 shotJsonEdits[idx] 接管，提交也发它
+  function buildShotSubmitJson(idx: number) {
+    const shot = shots[idx];
+    if (!shot) return null;
+    // Seedance 的 content 里最多容许一个 type:"text" 块（多了国内站会提交即失败）——
+    // prompt 和图片说明必须合并进同一块，和 createVideoTask() 的真实拼法保持一致
+    // 素材排布和编号都取自公共的 contentMedia（提交时发的是同一份）
+    const cm = subjectContext.contentMedia;
+    const dLines: string[] = [];
+    cm.filter(x => x.mediaType === 'image').forEach(x => {
+      const no = mediaNoOf(cm, x);
+      if (x.from === 'subject') {
+        const sub = videoSubjects.find(s => s.id === x.subjectId);
+        const a = scriptAnalysis.find(y => y.linkedSubjectId === x.subjectId);
+        const d = a ? `${a.appearance}；${a.personality}` : (sub?.description || '');
+        dLines.push(`图片${no}：角色「${a?.label || sub?.label || ''}」— ${d || '见图片'}`);
+      } else {
+        dLines.push(`图片${no}：参考素材「${x.name || '素材'}」— ${x.description || ''}`);
       }
-      if (videoId) {
-        try { await api.put(`/videos/${videoId}`, { audio_url: ttsRes.audioUrl, subtitle_input: ttsScript }); } catch {}
-      }
-    } catch (e) {
-      console.warn('TTS regen failed:', e);
-      setTtsNotice('配音生成失败，请重试');
-    } finally { setTtsLoading(false); }
+    });
+    const textParts = [shot.prompt, dLines.length > 0 ? dLines.join('\n') : ''].filter(Boolean);
+    const content: any[] = [{ type: 'text', text: textParts.join('\n\n') }];
+    cm.forEach(x => content.push(
+      x.mediaType === 'image' ? { type: 'image_url', image_url: { url: x.url }, role: 'reference_image' }
+      : x.mediaType === 'video' ? { type: 'video_url', video_url: { url: x.url }, role: 'reference_video' }
+      : { type: 'audio_url', audio_url: { url: x.url }, role: 'reference_audio' }));
+    return {
+      model,
+      content,
+      resolution, ratio,
+      duration: shot.duration || 8,
+      seed: batchSeedRef.current,
+      generate_audio: generateAudio,
+      watermark,
+      return_last_frame: returnLastFrame || undefined,
+      draft: draft || undefined,
+      service_tier: serviceTier !== 'default' ? serviceTier : undefined,
+      priority: priority > 0 ? priority : undefined,
+      tools: webSearch ? [{ type: 'web_search' }] : undefined,
+    };
   }
 
+  // 重新提交同一镜时必须先把上一轮的轮询停掉 —— 否则旧 interval 还在查旧任务，
+  // 回来的状态会盖掉刚提交的新任务（旧任务不会被取消，只是不再等它）
   async function submitShot(idx: number) {
     const shot = shots[idx];
     if (!shot) return;
-    setTasks(prev => ({ ...prev, [idx]: { shotIndex: idx, taskId: null, status: 'pending', videoUrl: null, localUrl: null, duration: null, error: null, submitting: true } }));
+    if (pollRefs.current[idx]) { clearInterval(pollRefs.current[idx]); delete pollRefs.current[idx]; }
+    setTasks(prev => ({ ...prev, [idx]: { shotIndex: idx, taskId: null, status: 'pending', videoUrl: null, localUrl: null, duration: null, error: null, submitting: true, startedAt: Date.now() } }));
     try {
       // All shots share the same seed for visual consistency
       if (batchSeedRef.current === null) {
         batchSeedRef.current = seed ?? Math.floor(Math.random() * 2147483647);
       }
       const sharedSeed = batchSeedRef.current;
-      // Subject images first
-      const subjectMedia = videoSubjects
-        .filter(s => s.image_url)
-        .map(s => ({
-          url: s.asset_id ? `asset://${s.asset_id}` : s.image_url!,
-          mediaType: 'image' as const,
-        }));
-      // Maintain upload order: send media in the same order as mediaItems
-      const orderedMedia = [
-        ...subjectMedia,
-        ...mediaItems
-          .filter(m => m.url && !m.uploading)
-          .map(m => ({
-            url: m.url!.startsWith('asset://remote:') ? m.url!.replace('asset://remote:', 'asset://') : m.url!,
-            mediaType: m.mediaType,
-          })),
-      ];
+
+      const editedJson = shotJsonEdits[idx];
+      let res: { taskId: string; status: string; prompt?: string };
+      if (editedJson !== undefined) {
+        // 「查看提交 JSON」被手改过——原样发这份，不再从 prompt/orderedMedia 重新拼，
+        // 也就不会再走后端的锚定锁/字幕对台词（用户看到的框就是最终会发的）
+        let parsed: any;
+        try { parsed = JSON.parse(editedJson); } catch { throw new Error('提交 JSON 格式错误，请检查后再试'); }
+        res = await api.post<{ taskId: string; status: string; prompt?: string }>('/video/generate', {
+          content: parsed.content,
+          tools: parsed.tools,
+          model: parsed.model ?? model,
+          resolution: parsed.resolution ?? resolution,
+          ratio: parsed.ratio ?? ratio,
+          duration: parsed.duration ?? (shot.duration || 8),
+          seed: parsed.seed ?? sharedSeed,
+          generateAudio: parsed.generate_audio ?? generateAudio,
+          watermark: parsed.watermark ?? watermark,
+          webSearch: Array.isArray(parsed.tools) && parsed.tools.length > 0,
+          returnLastFrame: parsed.return_last_frame ?? returnLastFrame,
+          draft: parsed.draft ?? draft,
+          serviceTier: parsed.service_tier ?? (serviceTier !== 'default' ? serviceTier : undefined),
+          priority: parsed.priority ?? (priority > 0 ? priority : undefined),
+          region: region !== 'overseas' ? region : undefined,
+        });
+      } else {
+      // content 里的素材排布 —— 角色头像在前（asset:// 或图片 URL），然后是参考素材，
+      // 编号（@图片N/@视频N/@音频N）就是这个数组里同类型的序号，见 buildContentMedia()
+      const cm = subjectContext.contentMedia;
+      const orderedMedia: Array<{ url: string; mediaType: 'image' | 'video' | 'audio' }> =
+        cm.map(x => ({ url: x.url, mediaType: x.mediaType }));
       // Append per-shot reference images
       if (shot.reference_images?.length) {
         for (const img of shot.reference_images) {
           orderedMedia.push({ url: img.url, mediaType: 'image' as const });
         }
       }
-      // Build imageDescriptions text for content
-      const descLines: string[] = [];
-      const withImg = videoSubjects.filter(s => s.image_url);
-      withImg.forEach((s, i) => {
-        const analysis = scriptAnalysis.find(a => a.linkedSubjectId === s.id);
-        const desc = analysis ? `${analysis.appearance}；${analysis.personality}` : (s.description || '');
-        const name = analysis?.label || s.label;
-        descLines.push(`图片${i + 1}：角色「${name}」— ${desc || '见图片'}`);
-      });
-      const mediaImages = mediaItems.filter(m => m.url && !m.uploading && m.mediaType === 'image');
-      mediaImages.forEach((m, i) => {
-        descLines.push(`图片${withImg.length + i + 1}：参考素材「${m.name || '素材'}」— ${m.description || ''}`);
-      });
-      // 视频/音频也按类型各自编号 —— prompt 里可以用 @视频N / @音频N 指代
-      mediaItems.filter(m => m.url && !m.uploading && m.mediaType === 'video')
-        .forEach((m, i) => descLines.push(`视频${i + 1}：参考视频「${m.name || '素材'}」— ${m.description || ''}`));
-      mediaItems.filter(m => m.url && !m.uploading && m.mediaType === 'audio')
-        .forEach((m, i) => descLines.push(`音频${i + 1}：参考音频「${m.name || '素材'}」— ${m.description || ''}`));
-      const imageDescriptions = descLines.length > 0 ? descLines.join('\n') : undefined;
+      // 素材说明的编号同样从 cm 里查，和上面这份 orderedMedia 是同一个排布
+      const imageDescriptions = subjectContext.imageDescriptions || undefined;
 
-      const res = await api.post<{ taskId: string; status: string; prompt?: string }>('/video/generate', {
+      res = await api.post<{ taskId: string; status: string; prompt?: string }>('/video/generate', {
         prompt: shot.prompt, orderedMedia, imageDescriptions,
         // 角色原文：后端提交前把这一镜的定义句统一换成它（原文锁上线前生成的分镜、
         // 手动改过的 prompt 都只经过这条路，不在这里锁就还是一镜一个样）
@@ -2275,8 +2659,9 @@ export default function VoiceoverPage() {
         priority: priority > 0 ? priority : undefined,
         region: region !== 'overseas' ? region : undefined,
       });
+      }
       const { taskId, status } = res;
-      setTasks(prev => ({ ...prev, [idx]: { shotIndex: idx, taskId, status, videoUrl: null, localUrl: null, duration: null, error: null, submitting: false } }));
+      setTasks(prev => ({ ...prev, [idx]: { shotIndex: idx, taskId, status, videoUrl: null, localUrl: null, duration: null, error: null, submitting: false, startedAt: prev[idx]?.startedAt || Date.now() } }));
       // 定义句被原文锁改写过就回写这一镜 —— 否则页面上显示的还是旧文本，
       // 看起来像没生效，重开也还是旧的
       const locked = res.prompt && res.prompt !== shot.prompt ? res.prompt : null;
@@ -2293,12 +2678,30 @@ export default function VoiceoverPage() {
     }
   }
 
+  // 重新生成要确认：又是一次花钱的提交，而且 Seedance 没有取消接口，发出去就收不回来
+  function submitShotConfirmed(idx: number, mode: 'redo' | 'stuck') {
+    const n = shots[idx]?.shot_number ?? idx + 1;
+    const msg = mode === 'stuck'
+      ? `分镜${n} 还在排队/生成中。重新生成会另开一个任务，旧任务不会被取消，只是不再等它。确定继续？`
+      : `分镜${n} 已经有生成好的视频，重新生成会用新的覆盖它。确定继续？`;
+    if (!window.confirm(msg)) return;
+    submitShot(idx);
+  }
+
   async function submitAllShots() {
-    for (let i = 0; i < shots.length; i++) {
-      const t = tasks[i];
-      if (!(t?.status === 'succeeded' || t?.status === 'running' || t?.status === 'queued')) {
-        await submitShot(i); await new Promise(r => setTimeout(r, 800));
-      }
+    // 要提交哪几镜先算出来：已经成功的、正在排队/生成的都跳过
+    const pending = shots
+      .map((_, i) => i)
+      .filter(i => {
+        const t = tasks[i];
+        return !(t?.status === 'succeeded' || t?.status === 'running' || t?.status === 'queued');
+      });
+    if (pending.length === 0) return;
+    // 一次批量提交是花钱的操作，点错了没法撤（Seedance 没有取消接口），所以先确认
+    const list = pending.map(i => shots[i].shot_number ?? i + 1).join('、');
+    if (!window.confirm(`将提交 ${pending.length} 个分镜生成视频（分镜 ${list}），已生成和排队中的会跳过。确定继续？`)) return;
+    for (const i of pending) {
+      await submitShot(i); await new Promise(r => setTimeout(r, 800));
     }
   }
 
@@ -2329,10 +2732,6 @@ export default function VoiceoverPage() {
   }
 
   async function handleMerge() {
-    // 叙事短片不传 audioUrl —— 后端保留各分镜视频自带的对白音轨，只烧字幕。
-    // 解说纪录片仍然用 Azure TTS 整轨覆盖。
-    const useShotAudio = videoType !== 'narration';
-    if (!useShotAudio && !audioUrl) { setMergeError('请先生成语音（TTS）'); return; }
     const succeededShots = shots.map((shot, i) => ({ shot, task: tasks[i] })).filter(({ task }) => task?.status === 'succeeded' && (task.localUrl || task.videoUrl));
     if (succeededShots.length < 1) return;
     // targetDuration 是按语音排好的秒数，duration 是实际生成出来的 —— 后端按前者把画面贴齐
@@ -2344,7 +2743,8 @@ export default function VoiceoverPage() {
     const fullSubtitle = anyShotSub ? shots.map(s => s.subtitle || '').join('') : subtitleInput.trim();
     setMerging(true); setMergeError(''); setMergedVideoUrl(null);
     try {
-      const res = await api.post<{ mergeId: string }>('/voiceover/merge-async', { videos: videoList, audioUrl: useShotAudio ? undefined : audioUrl, voice, subtitle: fullSubtitle, subtitleStyle, banner, bannerStyle, wordBoundaries });
+      // 不传 audioUrl —— 后端保留各分镜视频自带的对白音轨，只烧字幕。
+      const res = await api.post<{ mergeId: string }>('/voiceover/merge-async', { videos: videoList, audioUrl: undefined, voice, subtitle: fullSubtitle, subtitleStyle, banner, bannerStyle, wordBoundaries });
       setMergeId(res.mergeId);
       pollMergeStatus(res.mergeId);
     } catch (err) {
@@ -2369,10 +2769,22 @@ export default function VoiceoverPage() {
 
   const anyUploading    = mediaItems.some(m => m.uploading);
   const mediaDescMissing = mediaItems.some(m => !m.uploading && m.url && !m.description?.trim());
+  // 还没做过「剧本分析」时，下面三个页签（对白剧本/角色/参考素材）和「生成分镜脚本」
+  // 全都藏起来 —— 那会儿它们只有空状态，页面上只留「视频描述 → 剧本分析」一条路
+  const scriptReady = Boolean(analyzingScript || dialogueScript.trim() || scriptAnalysis.length > 0);
+  // 「剧本分析」按钮抽出来复用：视频描述展开时它和输入框同一行（手机上等高并排），
+  // 折叠时退回自己单独一行
+  const analyzeBtn = (
+    <button type="button" onClick={handleAnalyzeScript}
+      disabled={analyzingScript || (!script.trim() && !subtitleInput.trim())}
+      className={styles.conceptAnalyzeBtn}>
+      {/* 手机上折成「剧本 / 分析」两行（桌面 br 是 display:none，仍是一行） */}
+      {analyzingScript ? '分析中…' : <>剧本<br className={styles.brMobile} />分析</>}
+    </button>
+  );
   const succeededCount  = Object.values(tasks).filter(t => t.status === 'succeeded').length;
   const allDone         = shots.length > 0 && shots.every((_, i) => { const t = tasks[i]; return t && TERMINAL.has(t.status); });
-  // 叙事短片没有 TTS 音轨也能合（用视频自带对白）
-  const canMerge        = (videoType !== 'narration' || !!audioUrl) && succeededCount >= 1;
+  const canMerge        = succeededCount >= 1;
   const estText         = subtitleInput.trim() || script;
   const estDuration     = estimateScriptDuration(estText);
   const estShotCount    = recommendShotCount(estDuration);
@@ -2468,7 +2880,9 @@ export default function VoiceoverPage() {
               <div style={{ marginBottom: 16 }}>
                 <p className={styles.cardTitle} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: scriptCollapsed ? 0 : 10 }}>
                   <span onClick={() => setScriptCollapsed(v => !v)} style={{ fontSize: 10, cursor: 'pointer', transition: 'transform 0.2s', transform: scriptCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}>▼</span>
-                  <span onClick={() => setScriptCollapsed(v => !v)} style={{ cursor: 'pointer', color: '#111827' }}>视频概念描述</span>
+                  {/* 和「N个分镜 · 视频N秒」同一个红色粗框，两个大段落一眼分得开 */}
+                  <span onClick={() => setScriptCollapsed(v => !v)}
+                    style={{ fontSize: 18, fontWeight: 700, color: '#111827', border: '3px solid #dc2626', borderRadius: 8, padding: '4px 12px', display: 'inline-block', cursor: 'pointer', background: '#fef2f2' }}>视频描述</span>
                   <button type="button" onClick={() => setShowExamples(v => !v)}
                     style={{ display: 'inline-flex', alignItems: 'center', gap: 2, background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px', color: '#0d9488', fontSize: 13, fontWeight: 500 }}>
                     示例
@@ -2482,23 +2896,12 @@ export default function VoiceoverPage() {
                   </button>
                   <button type="button" onClick={() => setSbOpen(v => !v)}
                     style={{ fontSize: 11, padding: '2px 8px', border: '1px solid #2563eb', borderRadius: 5, background: sbOpen ? '#eff6ff' : '#fff', cursor: 'pointer', color: '#2563eb', fontWeight: 500, whiteSpace: 'nowrap' }}>
-                    🎬 专业分镜生成
+                    🎬 分镜设置
                   </button>
                   <span style={{ flex: 1 }} />
                 </p>
 
                   {!scriptCollapsed && (<>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 10 }}>
-                    {VIDEO_TYPES.map(opt => (
-                      <label key={opt.value} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 13, cursor: 'pointer', color: videoType === opt.value ? '#111827' : '#6b7280' }}>
-                        <input type="radio" name="videoType" value={opt.value} checked={videoType === opt.value}
-                          onChange={() => setVideoType(opt.value)}
-                          style={{ accentColor: '#2563eb', cursor: 'pointer', margin: 0 }} />
-                        {opt.label}
-                      </label>
-                    ))}
-                  </div>
-
                   {showAiInput && (
                     <div style={{ display: 'flex', gap: 6, marginBottom: 10, alignItems: 'center' }}>
                       <input type="text" value={aiTopic} onChange={e => setAiTopic(e.target.value)}
@@ -2529,80 +2932,118 @@ export default function VoiceoverPage() {
                     </div>
                   )}
 
-                  {/* 一个 textarea 两种身份：叙事短片下是概念描述，解说纪录片下就是字幕/解说词 */}
-                  <div style={{ position: 'relative', marginBottom: 10 }}>
-                    {conceptText.trim() && (
-                      <button type="button" onClick={() => setConceptText('')}
-                        style={{ position: 'absolute', top: 6, right: 8, zIndex: 1, background: 'none', border: 'none', fontSize: 12, color: '#9ca3af', cursor: 'pointer' }}>
-                        清空
-                      </button>
-                    )}
-                    <textarea rows={4} value={conceptText}
-                      onChange={e => setConceptText(e.target.value)}
-                      placeholder={videoType === 'narration' ? '输入解说词/字幕文本，将按分镜拆分并在视频中显示…' : '输入视频概念描述…'}
-                      className={styles.textarea} style={{ fontFamily: 'inherit', fontSize: 13, border: '2px solid #000' }} />
+                  {/* 唯一的 textarea：视频描述。手机上「剧本分析」和它并排、等高 */}
+                  <div className={styles.conceptRow}>
+                    <div className={styles.conceptBox} style={{ position: 'relative' }}>
+                      {conceptText.trim() && (
+                        <button type="button" onClick={() => setConceptText('')}
+                          style={{ position: 'absolute', top: 6, right: 8, zIndex: 1, background: 'none', border: 'none', fontSize: 12, color: '#9ca3af', cursor: 'pointer' }}>
+                          清空
+                        </button>
+                      )}
+                      <textarea rows={4} value={conceptText}
+                        onChange={e => setConceptText(e.target.value)}
+                        placeholder="输入视频描述…"
+                        className={styles.textarea} style={{ fontFamily: 'inherit', fontSize: 13, border: '2px solid #000', height: '100%' }} />
+                    </div>
+                    {analyzeBtn}
                   </div>
 
-                  {/* 弹窗经 portal 挂到 body，这里只是受控挂载点；
-                      视频类型由上面的 radio 驱动，概念取自唯一那个 textarea。 */}
+                  {/* 弹窗经 portal 挂到 body，这里只是受控挂载点；概念取自唯一那个 textarea。 */}
                   <StoryboardGenerator
-                    videoType={videoType}
+                    videoType="story"
                     open={sbOpen}
                     onOpenChange={setSbOpen}
                     hideTrigger
                     onSettingsChange={setSbSettings}
                   />
-                  </>)}
 
-                {/* 配音区只在解说纪录片下出现 —— 叙事短片的字幕为空，没有可配音的文本 */}
-                {videoType === 'narration' && (<>
-                {/* 配音（可选）— 字幕文本来自上面那个共享 textarea，这里只做音色和 TTS */}
-                <div style={{ marginBottom: 14 }}>
-                  <p className={styles.cardTitle} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-                    <span>配音（可选）</span>
-                    <span style={{ position: 'relative', display: 'inline-block' }}>
-                      <span onClick={() => setShowSubtitleTip(v => !v)} style={{ fontSize: 11, fontWeight: 400, textDecoration: 'underline', cursor: 'pointer', color: '#6b7280' }}>说明</span>
-                      {showSubtitleTip && (
-                        <div style={{ position: 'absolute', left: 0, top: '100%', marginTop: 4, background: '#1e293b', color: '#f1f5f9', fontSize: 12, lineHeight: 1.6, padding: '10px 12px', borderRadius: 8, width: 260, zIndex: 100, boxShadow: '0 4px 16px rgba(0,0,0,0.2)', whiteSpace: 'normal' }}>
-                          如果字幕输入内容，那么生成视频的字幕严格按照字幕内容来生成，如果字幕内容为空，系统会根据视频需求来自动生成合适的字幕
-                          <span onClick={() => setShowSubtitleTip(false)} style={{ display: 'block', textAlign: 'right', marginTop: 6, cursor: 'pointer', color: '#94a3b8', fontSize: 11 }}>关闭</span>
+                  {scriptAnalysisError && <div style={{ fontSize: 12, color: '#dc2626', margin: '6px 0' }}>{scriptAnalysisError}</div>}
+
+                  {/* 对白剧本 / 角色 / 参考素材 三块合成页签 */}
+                  {scriptReady && (() => {
+                    const mediaCount = mediaItems.filter(m => !m.uploading && m.url).length;
+                    const tabs = [
+                      ['script', '对白剧本'],
+                      ['roles',  `角色${scriptAnalysis.length ? ` ${scriptAnalysis.length}` : ''}`],
+                      ['media',  `参考素材${mediaCount ? ` ${mediaCount}` : ''}`],
+                    ] as const;
+                    return (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', margin: '4px 0 10px' }}>
+                        <div className={styles.stepTabs} style={{ margin: 0 }}>
+                          {tabs.map(([k, label]) => (
+                            <button key={k} type="button" onClick={() => { setStepTab(k); setTabsCollapsed(false); }}
+                              className={`${styles.stepTab} ${stepTab === k ? styles.stepTabOn : ''}`}>
+                              {label}
+                              {k === 'script' && analyzingScript && <span className={styles.shotTabOk}>写作中</span>}
+                            </button>
+                          ))}
                         </div>
-                      )}
-                    </span>
-                  </p>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, marginTop: -4, flexWrap: 'wrap' }}>
-                    <select value={voice} onChange={e => setVoice(e.target.value)}
-                      style={{ fontSize: 11, padding: '3px 6px', borderRadius: 6, border: '1px solid #111827', background: '#fff', color: '#374151', cursor: 'pointer', width: 110 }}>
-                      {AZURE_VOICES.map((v) => <option key={v.value} value={v.value}>{v.label}</option>)}
-                    </select>
-                    <button type="button" onClick={handleRegenTTS} disabled={ttsLoading || !subtitleInput.trim()}
-                      style={{ fontSize: 11, padding: '2px 8px', border: '1px solid #111827', borderRadius: 5, background: ttsLoading ? '#f3f4f6' : '#fff', cursor: (ttsLoading || !subtitleInput.trim()) ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap', color: '#374151' }}>
-                      {ttsLoading ? '生成中…' : audioUrl ? '重新生成' : '生成配音'}
-                    </button>
-                    {audioUrl && (
-                      <audio controls src={audioUrl} style={{ height: 28, flex: 1, minWidth: 120 }} />
-                    )}
-                  </div>
-                  {ttsNotice && (
-                    <p style={{ margin: '6px 0 0', fontSize: 11, lineHeight: 1.5, color: ttsNotice.includes('需要重新生成') ? '#b45309' : '#6b7280' }}>
-                      {ttsNotice}
-                    </p>
-                  )}
-                </div>
-                </>)}
+                        {/* 折叠标记：紧挨着页签，三角 + 两个字，不做成带框按钮 */}
+                        <span role="button" title={tabsCollapsed ? '展开' : '折叠'}
+                          onClick={() => setTabsCollapsed(v => !v)}
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 11.5, color: '#94a3b8', cursor: 'pointer', padding: '0 2px', userSelect: 'none', whiteSpace: 'nowrap' }}>
+                          <span style={{ fontSize: 9, display: 'inline-block', transition: 'transform .2s', transform: tabsCollapsed ? 'rotate(-90deg)' : 'none' }}>▼</span>
+                          {tabsCollapsed ? '展开' : '折叠'}
+                        </span>
+                        {/* AI改写和页签同一行、靠右；只在「对白剧本」页签下出现 */}
+                        <span style={{ flex: 1 }} />
+                        {/* 「说明」跟着「参考素材」页签走，和页签同一行、靠右 */}
+                        {stepTab === 'media' && (
+                          <span style={{ position: 'relative', display: 'inline-block' }}>
+                            <button type="button" onClick={() => setShowMediaTip(v => !v)}
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+                              <span style={{ fontSize: 12, color: '#6b7280', fontWeight: 400, textDecoration: 'underline' }}>上传素材说明</span>
+                            </button>
+                            {showMediaTip && (
+                              <div style={{ position: 'absolute', right: 0, top: '100%', marginTop: 4, background: '#1e293b', color: '#f1f5f9', fontSize: 12, lineHeight: 1.6, padding: '10px 12px', borderRadius: 8, width: 260, zIndex: 100, boxShadow: '0 4px 16px rgba(0,0,0,0.2)', whiteSpace: 'normal' }}>
+                                图片最多 8 张 · 视频最多 4 条 · 音频最多 4 条。上传素材后，AI 会根据素材内容和风格生成匹配的视频画面。
+                                <span onClick={() => setShowMediaTip(false)} style={{ display: 'block', textAlign: 'right', marginTop: 6, cursor: 'pointer', color: '#94a3b8', fontSize: 11 }}>关闭</span>
+                              </div>
+                            )}
+                          </span>
+                        )}
+                        {stepTab === 'script' && dialogueScript && !analyzingScript && (
+                          <button type="button" onClick={() => { setRewriteOpen(true); setRewritePreview(''); setRewriteError(''); }}
+                            style={{ fontSize: 11, padding: '4px 10px', border: '1px solid #7c3aed', borderRadius: 5, background: '#fff', cursor: 'pointer', color: '#7c3aed', fontWeight: 500, whiteSpace: 'nowrap' }}>
+                            AI改写
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })()}
 
-                  {/* 剧本分析按钮 */}
-                  <div style={{ marginTop: 10, marginBottom: 6 }}>
-                    <button type="button" onClick={handleAnalyzeScript}
-                      disabled={analyzingScript || (!script.trim() && !subtitleInput.trim())}
-                      style={{ fontSize: 13, padding: '6px 14px', borderRadius: 6, border: '1.5px solid #7c3aed', background: analyzingScript ? '#f5f3ff' : '#fff', color: '#7c3aed', cursor: (analyzingScript || (!script.trim() && !subtitleInput.trim())) ? 'not-allowed' : 'pointer', fontWeight: 500 }}>
-                      {analyzingScript ? '分析中…' : '剧本分析（提取角色）'}
-                    </button>
-                    {scriptAnalysisError && <span style={{ fontSize: 12, color: '#dc2626', marginLeft: 8 }}>{scriptAnalysisError}</span>}
-                  </div>
+                  {/* 对白剧本 —— 剧本分析写好的（或补做「生成分镜脚本」时后端自己写的）。
+                      生成中实时流式刷新（只读，编辑和轮询覆盖会打架）；写完才能改，
+                      改完点「生成分镜脚本」会带着这份改过的原文去开拍，不会被重写 */}
+                  {scriptReady && !tabsCollapsed && stepTab === 'script' && (
+                    <div style={{ marginBottom: 14 }}>
+                      {dialogueScript ? (
+                        <textarea
+                          ref={dialogueScriptBoxRef}
+                          className={styles.textarea}
+                          value={dialogueScript}
+                          onChange={e => setDialogueScript(e.target.value)}
+                          readOnly={analyzingScript}
+                          rows={Math.min(16, Math.max(6, dialogueScript.split('\n').length))}
+                          style={{ fontSize: 14, fontFamily: 'inherit', lineHeight: 1.8, background: analyzingScript ? '#faf5ff' : '#f9fafb', borderColor: '#000' }}
+                          placeholder="对白剧本将显示在这里，可手动编辑…"
+                        />
+                      ) : (
+                        <p style={{ margin: 0, fontSize: 12, color: '#9ca3af' }}>
+                          {analyzingScript ? '正在写对白剧本…' : '还没有对白剧本，点上面的「剧本分析」写一份（也可以直接点「生成分镜脚本」，后端会自己先写）。'}
+                        </p>
+                      )}
+                    </div>
+                  )}
 
                   {/* 剧本分析结果 */}
-                  {scriptAnalysis.length > 0 && (() => {
+                  {scriptReady && !tabsCollapsed && stepTab === 'roles' && scriptAnalysis.length === 0 && (
+                    <p style={{ margin: '0 0 14px', fontSize: 12, color: '#9ca3af' }}>
+                      还没有角色，点上面的「剧本分析」从剧本里提取。
+                    </p>
+                  )}
+                  {scriptReady && !tabsCollapsed && stepTab === 'roles' && scriptAnalysis.length > 0 && (() => {
                     // Build image number per analysis index (not per subject id, since duplicates allowed)
                     let imgCounter = 0;
                     const analysisImgNum: number[] = scriptAnalysis.map(a => {
@@ -2612,15 +3053,10 @@ export default function VoiceoverPage() {
                       }
                       return 0;
                     });
-                    return (<>
-                    <p onClick={() => setAnalysisCollapsed(v => !v)} className={styles.cardTitle} style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 16, marginBottom: analysisCollapsed ? 0 : 8, cursor: 'pointer', userSelect: 'none' }}>
-                      <span style={{ fontSize: 10, transition: 'transform 0.2s', transform: analysisCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}>▼</span>
-                      角色（{scriptAnalysis.length}个）
-                    </p>
-                    {!analysisCollapsed && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    return (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 14 }}>
                       {scriptAnalysis.map((item, idx) => (
-                          <div key={idx} style={{ padding: 10, border: '1px solid #e5e7eb', borderRadius: 6, background: '#fff', position: 'relative' }}>
+                          <div key={idx} style={{ padding: 10, border: '1px solid #000', borderRadius: 6, background: '#fff', position: 'relative' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
                               <div style={{ display: 'flex', flexDirection: 'column' }}>
                                 <span style={{ fontSize: 14, fontWeight: 600 }}>{item.label}</span>
@@ -2633,7 +3069,7 @@ export default function VoiceoverPage() {
                                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#16a34a', background: '#f0fdf4', padding: '2px 6px', borderRadius: 4 }}>
                                     {linked.image_url && <img src={linked.image_url} alt="" style={{ width: 36, height: 36, borderRadius: 4, objectFit: 'cover' }} />}
                                     <span style={{ display: 'flex', flexDirection: 'column' }}>
-                                      <span>{linked.label}</span>
+                                      {displayLabel(linked.label) && <span>{displayLabel(linked.label)}</span>}
                                       {imgNum > 0 && <span style={{ fontSize: 10, color: '#9ca3af' }}>图片{imgNum}</span>}
                                     </span>
                                     <button type="button" onClick={() => { const newA = scriptAnalysis.map((s, i) => i === idx ? { ...s, linkedSubjectId: undefined } : s); setScriptAnalysis(newA); setVideoSubjects(newA.filter(a => a.linkedSubjectId).map(a => projectSubjects.find(ps => ps.id === a.linkedSubjectId)).filter(Boolean) as ProjectSubject[]); }}
@@ -2674,7 +3110,7 @@ export default function VoiceoverPage() {
                                       <div style={{ position: 'absolute', right: 0, top: '100%', marginTop: 4, padding: 8, border: '1px solid #e5e7eb', borderRadius: 6, background: '#fff', zIndex: 50, boxShadow: '0 4px 12px rgba(0,0,0,0.1)', minWidth: 180 }}>
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                                           {audioItems.map((m, ai) => (
-                                            <div key={m.uid} onClick={() => setScriptAnalysis(prev => prev.map((s, i) => i === idx ? { ...s, linkedAudioUrl: m.url, _voicePickerOpen: false } : s))}
+                                            <div key={m.uid} onClick={() => patchAnalysis(idx, { linkedAudioUrl: m.url, _voicePickerOpen: false })}
                                               style={{ padding: '5px 8px', borderRadius: 4, cursor: 'pointer', fontSize: 12, background: item.linkedAudioUrl === m.url ? '#ecfeff' : '#f9fafb', border: item.linkedAudioUrl === m.url ? '1px solid #0891b2' : '1px solid transparent' }}>
                                               音频{ai + 1}：{m.name || '参考音频'}
                                             </div>
@@ -2713,29 +3149,10 @@ export default function VoiceoverPage() {
                                     )}
                                   </span>
                                 )}
-                                {projectSubjects.length > 0 && (
-                                  <span style={{ position: 'relative' }}>
-                                    <button type="button" onClick={() => setScriptAnalysis(prev => prev.map((s, i) => i === idx ? { ...s, _pickerOpen: !s._pickerOpen } : { ...s, _pickerOpen: false }))}
-                                      style={{ fontSize: 11, padding: '3px 8px', border: '1px solid #7c3aed', borderRadius: 4, background: '#fff', color: '#7c3aed', cursor: 'pointer' }}>
-                                      换头像
-                                    </button>
-                                    {item._pickerOpen && (
-                                      <div style={{ position: 'absolute', right: 0, top: '100%', marginTop: 4, padding: 8, border: '1px solid #e5e7eb', borderRadius: 6, background: '#fff', zIndex: 50, boxShadow: '0 4px 12px rgba(0,0,0,0.1)', minWidth: 160 }}>
-                                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                                          {projectSubjects.map(ps => (
-                                            <div key={ps.id} onClick={() => { linkAnalysisSubject(idx, ps.id); setScriptAnalysis(prev => prev.map((s, i) => i === idx ? { ...s, _pickerOpen: false } : s)); }}
-                                              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 8px', borderRadius: 4, cursor: 'pointer', fontSize: 12, background: item.linkedSubjectId === ps.id ? '#f5f3ff' : '#f9fafb', border: item.linkedSubjectId === ps.id ? '1px solid #7c3aed' : '1px solid transparent' }}>
-                                              {ps.image_url && <img src={ps.image_url} alt="" style={{ width: 28, height: 28, borderRadius: 3, objectFit: 'cover' }} />}
-                                              <span>{ps.label}</span>
-                                            </div>
-                                          ))}
-                                        </div>
-                                        <button type="button" onClick={() => setScriptAnalysis(prev => prev.map((s, i) => i === idx ? { ...s, _pickerOpen: false } : s))}
-                                          style={{ marginTop: 6, fontSize: 11, color: '#6b7280', background: 'none', border: 'none', cursor: 'pointer' }}>关闭</button>
-                                      </div>
-                                    )}
-                                  </span>
-                                )}
+                                <button type="button" onClick={() => { setAvatarPickerIdx(idx); setAvatarPickerTab('real'); setAvatarSearch(''); }}
+                                  style={{ fontSize: 11, padding: '3px 8px', border: '1px solid #7c3aed', borderRadius: 4, background: '#fff', color: '#7c3aed', cursor: 'pointer' }}>
+                                  换头像
+                                </button>
                                 <button type="button" onClick={() => {
                                   const droppedAudio = scriptAnalysis[idx]?.linkedAudioUrl;
                                   const newA = scriptAnalysis.filter((_, i) => i !== idx);
@@ -2746,37 +3163,32 @@ export default function VoiceoverPage() {
                                   style={{ background: 'none', border: '1px solid #dc2626', borderRadius: 4, color: '#dc2626', cursor: 'pointer', fontSize: 11, padding: '3px 8px' }}>删除</button>
                               </span>
                             </div>
-                            <p style={{ fontSize: 12, color: '#374151', margin: '0 0 4px', lineHeight: 1.5 }}><b>形象：</b>{item.appearance}</p>
-                            <p style={{ fontSize: 12, color: '#374151', margin: 0, lineHeight: 1.5 }}><b>性格：</b>{item.personality}</p>
+                            {/* 形象/性格都可改。**形象这段会被逐镜一字不改地贴进每个分镜的
+                                prompt_en**（角色定义原文锁），所以改这里等于改全片的长相；
+                                性格只用于这张卡的展示，不进提示词 */}
+                            <label style={{ display: 'block', fontSize: 12, color: '#374151', marginBottom: 4 }}>
+                              <b>形象</b>
+                              <span style={{ fontSize: 10, color: '#9ca3af', marginLeft: 4 }}>每一镜都会原样写进提示词</span>
+                              <textarea value={item.appearance || ''} rows={3}
+                                onChange={e => patchAnalysis(idx, { appearance: e.target.value })}
+                                className={styles.textarea} style={{ fontSize: 12, lineHeight: 1.6, marginTop: 2 }} />
+                            </label>
+                            <label style={{ display: 'block', fontSize: 12, color: '#374151', margin: 0 }}>
+                              <b>性格</b>
+                              <span style={{ fontSize: 10, color: '#9ca3af', marginLeft: 4 }}>只用于这张卡，不进提示词</span>
+                              <textarea value={item.personality || ''} rows={2}
+                                onChange={e => patchAnalysis(idx, { personality: e.target.value })}
+                                className={styles.textarea} style={{ fontSize: 12, lineHeight: 1.6, marginTop: 2 }} />
+                            </label>
                           </div>
                         ))}
                       </div>
-                      )}
-                  </>);
+                  );
                   })()}
 
                   {/* 参考素材 */}
-                  <p className={styles.cardTitle} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: mediaCollapsed ? 0 : 6, marginTop: 20, cursor: 'pointer', userSelect: 'none' }} onClick={() => setMediaCollapsed(v => !v)}>
-                    <span style={{ fontSize: 10, transition: 'transform 0.2s', transform: mediaCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}>▼</span>
-                    参考素材({mediaItems.filter(m => !m.uploading && m.url).length}个)
-                    {!mediaCollapsed && (<>
-                    <span style={{ position: 'relative', display: 'inline-block' }} onClick={e => e.stopPropagation()}>
-                      <button type="button" onClick={() => setShowMediaTip(v => !v)}
-                        style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
-                        <span style={{ fontSize: 12, color: '#6b7280', fontWeight: 400, textDecoration: 'underline' }}>说明</span>
-                      </button>
-                      {showMediaTip && (
-                        <div style={{ position: 'absolute', left: 0, top: '100%', marginTop: 4, background: '#1e293b', color: '#f1f5f9', fontSize: 12, lineHeight: 1.6, padding: '10px 12px', borderRadius: 8, width: 260, zIndex: 100, boxShadow: '0 4px 16px rgba(0,0,0,0.2)', whiteSpace: 'normal' }}>
-                          图片最多 8 张 · 视频最多 4 条 · 音频最多 4 条。上传素材后，AI 会根据素材内容和风格生成匹配的视频画面。
-                          <span onClick={() => setShowMediaTip(false)} style={{ display: 'block', textAlign: 'right', marginTop: 6, cursor: 'pointer', color: '#94a3b8', fontSize: 11 }}>关闭</span>
-                        </div>
-                      )}
-                    </span>
-                    </>)}
-                  </p>
-                  {/* 两个入口单独占一行 —— 标题行挤三样东西，窄屏会换行错位 */}
-                  {!mediaCollapsed && (
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+                  {scriptReady && !tabsCollapsed && stepTab === 'media' && (<>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginBottom: 8 }}>
                       {/* 方舟预设素材：80 音色 / 35 段动作·运镜视频 / 71 张服饰环境画风角色图 */}
                       <button type="button" onClick={() => setLibOpen(true)}
                         style={{ fontSize: 13, padding: '4px 10px', border: '1px solid #0891b2', borderRadius: 5, background: '#fff', cursor: 'pointer', color: '#0891b2' }}>
@@ -2789,12 +3201,10 @@ export default function VoiceoverPage() {
                       <input ref={mediaInputRef} type="file" accept="image/*,video/*,audio/*" multiple style={{ display: 'none' }}
                         onChange={e => { addFiles(Array.from(e.target.files ?? [])); e.target.value = ''; }} />
                     </div>
-                  )}
-                  {!mediaCollapsed && (
-                  <div style={{ padding: 10, border: '1px solid #e5e7eb', borderRadius: 8, background: '#f9fafb' }}>
-                    <MediaPanel items={mediaItemsForPanel} onAddFiles={addFiles} onRemove={removeMediaItem} onDescChange={(idx, desc) => setMediaItems(prev => prev.map((m, i) => i === idx ? { ...m, description: desc } : m))} uploadError={uploadError} imageOffset={videoSubjects.filter(s => s.image_url).length} />
-                  </div>
-                  )}
+                    <div style={{ padding: 10, border: '1px solid #e5e7eb', borderRadius: 8, background: '#f9fafb' }}>
+                      <MediaPanel items={mediaItemsForPanel} onAddFiles={addFiles} onRemove={removeMediaItem} onDescChange={(idx, desc) => setMediaItems(prev => prev.map((m, i) => i === idx ? { ...m, description: desc } : m))} uploadError={uploadError} imageOffset={videoSubjects.filter(s => s.image_url).length} />
+                    </div>
+                  </>)}
 
                   {/* 主体定义 */}
                   <div style={{ marginBottom: 14, display: 'none' }}>
@@ -2826,37 +3236,46 @@ export default function VoiceoverPage() {
 
                   {initError && <div className={styles.errorBox}>{initError}</div>}
 
+                  {scriptReady && (
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, marginTop: 18 }}>
-                  <button type="button" onClick={handleInit} disabled={initing || (!script.trim() && !subtitleInput.trim()) || anyUploading || mediaDescMissing}
-                    className={styles.btnPrimary} style={{ padding: '7px 24px', width: 'auto' }}>
+                  <button type="button" onClick={handleInitClick} disabled={initing || (!script.trim() && !subtitleInput.trim()) || anyUploading || mediaDescMissing}
+                    className={styles.btnDanger} style={{ padding: '7px 24px', width: 'auto' }}>
                     {initing ? (
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                        <span className={styles.spinner} style={{ borderColor: '#5eead4', borderTopColor: '#fff' }} />
+                        <span className={styles.spinner} style={{ borderColor: '#fca5a5', borderTopColor: '#fff' }} />
                         分镜进行中{initElapsed > 0 ? ` ${initElapsed}s` : ''}...
                       </span>
                     ) : anyUploading ? '素材上传中，请等待…' : mediaDescMissing ? '请填写素材说明' : initResult ? '重新生成分镜脚本' : '生成分镜脚本'}
                   </button>
                   {initing && (
                     <p style={{ margin: 0, fontSize: 11, color: '#6b7280' }}>
-                      任务在服务器上跑，通常 40-80 秒。可以离开这个页面，回来会自动接着取结果
+                      {sbStage === 'shots' ? '对白剧本已写好，正在拆分镜头、配运镜…' : sbStage === 'script' ? '正在写对白剧本…' : '任务在服务器上跑'}
+                      　可以离开这个页面，回来会自动接着取结果
                     </p>
                   )}
                   </div>
+                  )}
+                  </>)}
               </div>
 
               {/* ── Step 2 ── */}
               {initResult && shots.length > 0 && (
                 <div style={{ marginBottom: 16 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 0', flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: 18, fontWeight: 700, color: '#111827', textDecoration: 'underline', textDecorationColor: '#dc2626', textDecorationThickness: '3px', textUnderlineOffset: '4px' }}>
-                      {shots.length}个分镜 · 视频{Math.round(shots.reduce((a, s) => a + s.duration, 0))}秒{audioDuration > 0 ? ` · 音频${Math.round(audioDuration)}秒` : ''}
+                    {/* 点这一行折叠整个分镜列表（合并那块不跟着收） */}
+                    <span onClick={() => setShotsCollapsed(v => !v)}
+                      style={{ fontSize: 10, cursor: 'pointer', color: '#6b7280', transition: 'transform 0.2s', transform: shotsCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)', display: 'inline-block' }}>▼</span>
+                    {/* 红色粗框（原来是红色粗下划线）—— 这一行是分镜总览，要一眼看到 */}
+                    <span onClick={() => setShotsCollapsed(v => !v)}
+                      style={{ fontSize: 18, fontWeight: 700, color: '#111827', border: '3px solid #dc2626', borderRadius: 8, padding: '4px 12px', display: 'inline-block', cursor: 'pointer', background: '#fef2f2' }}>
+                      {shots.length}个分镜
                     </span>
-                    {succeededCount > 0 && <span style={{ fontSize: 13, color: '#16a34a' }}>{succeededCount}已生成</span>}
+                    {/* 时长和已生成连成一句，中间只有一个逗号，不留间距 */}
+                    <span style={{ fontSize: 13, color: '#16a34a' }}>
+                      视频{Math.round(shots.reduce((a, s) => a + s.duration, 0))}秒{audioDuration > 0 ? ` · 音频${Math.round(audioDuration)}秒` : ''}
+                      {succeededCount > 0 && <>,已生成{succeededCount}/{shots.length}个</>}
+                    </span>
                     {ttsLoading && <span style={{ fontSize: 12, color: '#2563eb' }}>语音生成中…</span>}
-                    <button type="button" onClick={() => openShotAi(0)}
-                      style={{ fontSize: 11, padding: '3px 10px', border: '1px solid #2563eb', borderRadius: 5, background: '#eff6ff', cursor: 'pointer', color: '#2563eb', fontWeight: 500 }}>
-                      生成分镜参考图
-                    </button>
                     <button type="button" onClick={() => {
                       const next = !allShotsExpanded;
                       setAllShotsExpanded(next);
@@ -2864,15 +3283,17 @@ export default function VoiceoverPage() {
                       shots.forEach((_, i) => { map[i] = next; });
                       setExpandedShots(map);
                     }}
-                      style={{ marginLeft: 'auto', fontSize: 11, padding: '3px 10px', border: '1px solid #d1d5db', borderRadius: 5, background: '#fff', cursor: 'pointer', color: '#374151' }}>
+                      style={{ marginLeft: 'auto', fontSize: 11, padding: '3px 10px', border: '1px solid #f59e0b', borderRadius: 5, background: '#f59e0b', cursor: 'pointer', color: '#fff', fontWeight: 600 }}>
                       {allShotsExpanded ? '全部折叠' : '全部展开'}
                     </button>
                   </div>
 
                   <div style={{ padding: '0 0 16px' }}>
+                    {!shotsCollapsed && (<>
                     {shots.map((shot, idx) => {
                       const task = tasks[idx];
                       const isExpanded = expandedShots[idx] ?? false;
+                      const shotTab: ShotTabKey = shotTabs[idx] ?? 'prompt';
                       return (
                         <Fragment key={idx}>
                           {!isExpanded ? (
@@ -2882,31 +3303,16 @@ export default function VoiceoverPage() {
                               <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                                 {shot.imageUrl && <img src={shot.imageUrl} alt="" style={{ width: 28, height: 28, borderRadius: 4, objectFit: 'cover', flexShrink: 0 }} />}
                                 <span className={styles.shotNum} style={{ flexShrink: 0 }}>分镜{shot.shot_number}</span>
-                                <span style={{ fontSize: 12, fontWeight: 600, color: '#374151', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 120 }}>
+                                {/* 标签挪走之后这一行宽松了，标题不用再挤在 120px 里 */}
+                                <span style={{ fontSize: 12, fontWeight: 600, color: '#374151', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 260 }}>
                                   {shot.title}
                                 </span>
-                                {shot.shot_size && <span style={{ fontSize: 10, color: '#6b7280', background: '#f3f4f6', borderRadius: 3, padding: '1px 4px' }}>{shot.shot_size}</span>}
-                                {shot.roll_type && (
-                                  <span title={shot.roll_type === 'a_roll' ? '画面里有人正对镜头说话' : '补充画面，不含正面口播'}
-                                    style={{ fontSize: 10, borderRadius: 3, padding: '1px 4px',
-                                      color: shot.roll_type === 'a_roll' ? '#9a3412' : '#0f766e',
-                                      background: shot.roll_type === 'a_roll' ? '#ffedd5' : '#ccfbf1' }}>
-                                    {shot.roll_type === 'a_roll' ? 'A-roll' : 'B-roll'}
+                                {/* 时长：收起状态也要看得见，排分镜节奏时不用一个个展开 */}
+                                {shot.duration ? (
+                                  <span style={{ flexShrink: 0, fontSize: 11, fontWeight: 600, color: '#0f766e', background: '#f0fdfa', border: '1px solid #99f6e4', borderRadius: 999, padding: '1px 7px', whiteSpace: 'nowrap' }}>
+                                    {shot.duration}s
                                   </span>
-                                )}
-                                {shot.voice_style && VOICE_STYLE_TAGS[shot.voice_style] && (
-                                  <span title="这一镜旁白的情绪，配音时转成 Azure 的表达风格"
-                                    style={{ fontSize: 10, borderRadius: 3, padding: '1px 4px',
-                                      color: VOICE_STYLE_TAGS[shot.voice_style].fg,
-                                      background: VOICE_STYLE_TAGS[shot.voice_style].bg }}>
-                                    {VOICE_STYLE_TAGS[shot.voice_style].label}
-                                  </span>
-                                )}
-                                {shot.mood && <span style={{ fontSize: 10, color: '#92400e', background: '#fef3c7', borderRadius: 3, padding: '1px 4px' }}>{shot.mood}</span>}
-                                {shot.camera_movement && <span style={{ fontSize: 10, color: '#1d4ed8', background: '#dbeafe', borderRadius: 3, padding: '1px 4px' }}>{shot.camera_movement}</span>}
-                                <span style={{ fontSize: 10, color: '#6b7280' }}>{shot.duration}s</span>
-                                {shot.subjects && shot.subjects.length > 0 && <span style={{ fontSize: 10, color: '#7c3aed', background: '#f5f3ff', borderRadius: 3, padding: '1px 4px' }}>{shot.subjects.join('/')}</span>}
-                                {(shot.camera_pan || shot.camera_tilt || (shot.camera_zoom && shot.camera_zoom !== 1)) && <span style={{ fontSize: 10, color: '#059669', background: '#d1fae5', borderRadius: 3, padding: '1px 4px' }}>3D</span>}
+                                ) : null}
                                 <span style={{ flex: 1 }} />
                                 {task && task.status && <StatusBadge status={task.status} />}
                                 {task?.videoUrl && <span style={{ fontSize: 11, color: '#16a34a' }}>▶</span>}
@@ -2914,6 +3320,9 @@ export default function VoiceoverPage() {
                                   style={{ width: 14, height: 14, color: '#9ca3af', flexShrink: 0 }}>
                                   <path d="m6 9 6 6 6-6"/>
                                 </svg>
+                                {/* 收起状态只留「分镜N + 标题 + 一句话描述」——景别/AB-roll/氛围/运镜/时长
+                                    那排标签挪到展开后的「参数」页签（模型给的英文光线描述能把这一行撑得很长） */}
+                                {shot.description && <p className={styles.shotDescRow}>{shot.description}</p>}
                               </div>
                             </div>
                           ) : (
@@ -2924,15 +3333,51 @@ export default function VoiceoverPage() {
                                 <span className={styles.shotNum}>分镜{shot.shot_number}</span>
                                 <div className={styles.shotMeta}>
                                   <p className={styles.shotTitle}>{shot.title}</p>
-                                  <p className={styles.shotDesc}>{shot.description}</p>
                                 </div>
                               </div>
+                              {/* 状态 + 生成按钮：和「分镜N」同一行、靠右（.shotHead 是 space-between），
+                                  页签切到哪一页都在。整行是收起卡片的点击区，所以这一小块要吃掉自己的点击事件 */}
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}
+                                onClick={e => e.stopPropagation()}>
+                                {task && task.status && <StatusBadge status={task.status} />}
+                                <button type="button"
+                                  onClick={() => task?.status === 'succeeded' ? submitShotConfirmed(idx, 'redo') : submitShot(idx)}
+                                  disabled={task?.submitting || (task?.taskId != null && !TERMINAL.has(task?.status || ''))}
+                                  className={styles.btnShotGen}>
+                                  {task?.submitting ? '提交中…' : (task?.taskId && !TERMINAL.has(task.status)) ? '生成中' : task?.status === 'succeeded' ? '重新生成' : `生成视频${idx + 1}`}
+                                </button>
+                              </span>
                               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
                                 style={{ width: 14, height: 14, color: '#9ca3af', flexShrink: 0, transform: 'rotate(180deg)' }}>
                                 <path d="m6 9 6 6 6-6"/>
                               </svg>
+                              {/* 一句话描述独占一行：.shotHead 是 flex-wrap，给它 100% 宽就换到下一行，
+                                  不再和标题挤在按钮左边那点宽度里（仍在收起卡片的点击区内） */}
+                              {shot.description && <p className={styles.shotDescRow}>{shot.description}</p>}
                             </div>
 
+                            {/* 卡内页签。生成按钮和任务状态不在这儿 —— 它们钉在上面的「分镜N」标题行，
+                                不管切到哪一页都能提交、都看得到这一镜跑到哪了 */}
+                            <div className={styles.shotTabs}>
+                              {SHOT_TABS.map(([k, label]) => (
+                                <button key={k} type="button"
+                                  onClick={() => setShotTabs(prev => ({ ...prev, [idx]: k }))}
+                                  className={`${styles.shotTab} ${shotTab === k ? styles.shotTabOn : ''}`}>
+                                  {label}
+                                  {/* 手改过 JSON 的分镜按编辑后的发送，页签上标一下，免得忘了还挂着改动 */}
+                                  {k === 'json' && shotJsonEdits[idx] !== undefined && <span className={styles.shotTabDot}>已改</span>}
+                                  {/* 片子出来了就在「预览」上点一下 —— 视频进了页签，停在别的页签会看不见 */}
+                                  {k === 'preview' && task?.videoUrl && <span className={styles.shotTabOk}>▶</span>}
+                                </button>
+                              ))}
+                            </div>
+
+                            {shotTab === 'params' && (<>
+                            {/* 这一镜的属性一眼过（只读）；改还是改下面那排控件。
+                                A-roll/B-roll 和情绪标签没有对应的控件，只在这里看得到 */}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                              <ShotChips shot={shot} />
+                            </div>
                             {/* Shot reference image */}
                             <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '8px 0' }}>
                               {shot.imageUrl ? (
@@ -3005,98 +3450,91 @@ export default function VoiceoverPage() {
                                 </button>
                               </div>
                             </div>
+                            </>)}
 
-
+                            {shotTab === 'prompt' && (
                             <div style={{ marginBottom: 8 }}>
-                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-                                <span className={styles.fieldLabel} style={{ margin: 0 }}>分镜{idx + 1}场景描述（可编辑）</span>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                  {task && task.status && <StatusBadge status={task.status} />}
-                                  <button type="button" onClick={() => submitShot(idx)}
-                                    disabled={task?.submitting || (task?.taskId != null && !TERMINAL.has(task?.status || ''))}
-                                    className={styles.btnShotGen}>
-                                    {task?.submitting ? '提交中…' : (task?.taskId && !TERMINAL.has(task.status)) ? '生成中' : task?.status === 'succeeded' ? '重新生成' : `生成视频${idx + 1}`}
-                                  </button>
-                                </div>
-                              </div>
-                              <textarea rows={4} value={shot.prompt}
+                              <span className={styles.fieldLabel}>分镜{idx + 1}场景描述（可编辑）</span>
+                              <textarea rows={10} value={shot.prompt}
                                 onChange={e => { const u = [...shots]; u[idx] = { ...u[idx], prompt: e.target.value }; setShots(u); markShotDirty(idx); }}
                                 className={styles.textarea} />
                             </div>
+                            )}
 
+                            {shotTab === 'subtitle' && (
                             <div style={{ marginBottom: 8 }}>
                               <span className={styles.fieldLabel}>分镜{idx + 1}字幕</span>
-                              <textarea rows={2} value={shot.subtitle}
+                              <textarea rows={4} value={shot.subtitle}
                                 onChange={e => { const u = [...shots]; u[idx] = { ...u[idx], subtitle: e.target.value }; setShots(u); markShotDirty(idx); }}
                                 className={styles.textarea} />
                             </div>
+                            )}
 
                             {task?.error && <p className={styles.errInline} style={{ marginTop: 6 }}>{task.error}</p>}
 
-                            <details className={styles.jsonDetails}>
-                              <summary className={styles.fieldLabel} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer', userSelect: 'none', marginBottom: 4 }}>查看提交 JSON</summary>
-                              <pre style={{ margin: '6px 0 0', padding: 8, background: '#1e293b', color: '#e2e8f0', borderRadius: 6, fontSize: 11, lineHeight: 1.5, overflow: 'auto', maxHeight: 200 }}>
-                                {JSON.stringify((() => {
-                                  const content: any[] = [{ type: 'text', text: shot.prompt }];
-                                  // Image descriptions text
-                                  const dLines: string[] = [];
-                                  const wImg = videoSubjects.filter(s => s.image_url);
-                                  wImg.forEach((s, i) => {
-                                    const a = scriptAnalysis.find(x => x.linkedSubjectId === s.id);
-                                    const d = a ? `${a.appearance}；${a.personality}` : (s.description || '');
-                                    const nm = a?.label || s.label;
-                                    dLines.push(`图片${i + 1}：角色「${nm}」— ${d || '见图片'}`);
-                                  });
-                                  const mImgs = mediaItems.filter(m => m.url && !m.uploading && m.mediaType === 'image');
-                                  mImgs.forEach((m, i) => {
-                                    dLines.push(`图片${wImg.length + i + 1}：参考素材「${m.name || '素材'}」— ${m.description || ''}`);
-                                  });
-                                  if (dLines.length > 0) content.push({ type: 'text', text: dLines.join('\n') });
-                                  // Subject images first
-                                  videoSubjects.filter(s => s.image_url).forEach(s => {
-                                    content.push({ type: 'image_url', image_url: { url: s.asset_id ? `asset://${s.asset_id}` : s.image_url }, role: 'reference_image' });
-                                  });
-                                  // Maintain upload order — iterate mediaItems directly
-                                  mediaItems.filter(m => m.url && !m.uploading).forEach(m => {
-                                    const url = m.url!.startsWith('asset://remote:') ? m.url!.replace('asset://remote:', 'asset://') : m.url!;
-                                    if (m.mediaType === 'image') {
-                                      content.push({ type: 'image_url', image_url: { url }, role: 'reference_image' });
-                                    } else if (m.mediaType === 'video') {
-                                      content.push({ type: 'video_url', video_url: { url }, role: 'reference_video' });
-                                    } else if (m.mediaType === 'audio') {
-                                      content.push({ type: 'audio_url', audio_url: { url }, role: 'reference_audio' });
-                                    }
-                                  });
-                                  return {
-                                    model,
-                                    content,
-                                    resolution, ratio,
-                                    duration: shot.duration || 8,
-                                    seed: batchSeedRef.current,
-                                    generate_audio: generateAudio,
-                                    watermark,
-                                    return_last_frame: returnLastFrame || undefined,
-                                    draft: draft || undefined,
-                                    service_tier: serviceTier !== 'default' ? serviceTier : undefined,
-                                    priority: priority > 0 ? priority : undefined,
-                                    tools: webSearch ? [{ type: 'web_search' }] : undefined,
-                                  };
-                                })(), null, 2)}
-                              </pre>
-                            </details>
-
-                            {task?.taskId && !TERMINAL.has(task.status) && (
-                              <div className={styles.pollingRow}>
-                                <span className={styles.pollingText}>
-                                  <span className={`${styles.spinner} ${styles.spinnerBlue}`} />生成中，每 10 秒自动查询
-                                </span>
-                                <button type="button" onClick={() => pollTaskById(idx, task.taskId!)} className={styles.refreshBtn}>立即刷新</button>
+                            {shotTab === 'json' && (
+                              <div style={{ marginBottom: 8 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 4 }}>
+                                  <span className={styles.fieldLabel} style={{ margin: 0 }}>JSON（可编辑，改完点右上「生成视频」按编辑后的发送）</span>
+                                  {shotJsonEdits[idx] !== undefined && (
+                                    <button type="button" onClick={() => setShotJsonEdits(prev => { const n = { ...prev }; delete n[idx]; return n; })}
+                                      style={{ fontSize: 10, padding: '1px 6px', border: '1px solid #9ca3af', borderRadius: 3, background: '#fff', color: '#6b7280', cursor: 'pointer' }}>
+                                      恢复自动生成
+                                    </button>
+                                  )}
+                                </div>
+                                {(() => {
+                                  const defaultText = JSON.stringify(buildShotSubmitJson(idx), null, 2);
+                                  const text = shotJsonEdits[idx] ?? defaultText;
+                                  let parseError = '';
+                                  if (shotJsonEdits[idx] !== undefined) {
+                                    try { JSON.parse(shotJsonEdits[idx]); } catch { parseError = 'JSON 格式错误，无法提交'; }
+                                  }
+                                  return (<>
+                                    <textarea rows={16} spellCheck={false} value={text}
+                                      onChange={e => setShotJsonEdits(prev => ({ ...prev, [idx]: e.target.value }))}
+                                      style={{ width: '100%', boxSizing: 'border-box', margin: 0, padding: 8, background: '#1e293b', color: '#e2e8f0', borderRadius: 6, fontSize: 11, lineHeight: 1.5, fontFamily: 'monospace', border: parseError ? '1px solid #dc2626' : '1px solid transparent', resize: 'vertical' }} />
+                                    {parseError && <p style={{ color: '#dc2626', fontSize: 11, margin: '4px 0 0' }}>{parseError}</p>}
+                                  </>);
+                                })()}
                               </div>
                             )}
-                            {task?.videoUrl && (
+
+                            {task?.taskId && !TERMINAL.has(task.status) && (() => {
+                              // 排队/生成排太久（3 分钟）就放出「重新生成」：另开一个任务，
+                              // 不再等旧的（旧任务无法取消，只是从此不再轮询它）
+                              const waited = taskNow - (task.startedAt || taskNow);
+                              const stuck  = waited >= STUCK_AFTER_MS;
+                              return (
+                              <div className={styles.pollingRow} style={{ flexWrap: 'wrap' }}>
+                                <span className={styles.pollingText}>
+                                  <span className={`${styles.spinner} ${styles.spinnerBlue}`} />
+                                  {task.status === 'queued' ? '队列中' : '生成中'}，已等待 {fmtElapsed(waited)}，每 10 秒自动查询
+                                </span>
+                                <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                                  <button type="button" onClick={() => pollTaskById(idx, task.taskId!)} className={styles.refreshBtn}>立即刷新</button>
+                                  {stuck && (
+                                    <button type="button" onClick={() => submitShotConfirmed(idx, 'stuck')} className={styles.refreshBtn}
+                                      title="等太久了？另开一个新任务重新生成。旧任务不会被取消，只是不再等它"
+                                      style={{ borderColor: '#f59e0b', color: '#b45309', background: '#fffbeb' }}>
+                                      重新生成
+                                    </button>
+                                  )}
+                                </span>
+                                {stuck && (
+                                  <span style={{ fontSize: 11, color: '#b45309', width: '100%' }}>
+                                    等太久了？点「重新生成」另开一个任务 —— 旧任务不会被取消，只是不再等它。
+                                  </span>
+                                )}
+                              </div>);
+                            })()}
+                            {shotTab === 'preview' && (
                               <div style={{ marginBottom: 8 }}>
-                                <span className={styles.fieldLabel}>预览</span>
-                                <VideoThumb src={task.videoUrl} ratio={shot.ratio || ratio} subtitle={shot.subtitle} />
+                                {task?.videoUrl
+                                  ? <VideoThumb src={task.videoUrl} ratio={shot.ratio || ratio} subtitle={shot.subtitle} />
+                                  : <p style={{ fontSize: 12, color: '#9ca3af', margin: '4px 0' }}>
+                                      这一镜还没有生成好的视频，点右上「{task?.taskId && !TERMINAL.has(task.status) ? '生成中…' : `生成视频${idx + 1}`}」。
+                                    </p>}
                               </div>
                             )}
                           </div>
@@ -3105,13 +3543,14 @@ export default function VoiceoverPage() {
                       );
                     })}
 
-                    <div className={styles.shotListActions} style={{ marginTop: 12, marginBottom: 12 }}>
+                    <div className={styles.shotListActions} style={{ marginTop: 12, marginBottom: 12, justifyContent: 'center' }}>
                       <button type="button" onClick={submitAllShots}
                         disabled={succeededCount === shots.length}
-                        className={styles.btnSmTeal} style={{ width: '100%' }}>
+                        className={styles.btnSmDanger} style={{ width: 'auto', padding: '8px 24px' }}>
                         {succeededCount === shots.length ? '全部完成' : '一键生成所有分镜视频'}
                       </button>
                     </div>
+                    </>)}
 
                     {/* ── Step 3: Merge ── */}
                     {canMerge && (
@@ -3119,15 +3558,16 @@ export default function VoiceoverPage() {
                         {succeededCount >= 1 && (
                           <>
                             <p className={styles.mergeTitle}>{succeededCount} / {shots.length} 个分镜视频已生成{allDone ? ' — 全部完成！' : ''}</p>
-                            <p className={styles.mergeSub}>{videoType === 'narration' ? '合并后自动烧录字幕 + 叠加配音' : '合并后自动烧录字幕，保留分镜视频自带的对白音轨'}</p>
+                            <p className={styles.mergeSub}>合并后自动烧录字幕，保留分镜视频自带的对白音轨</p>
                           </>
                         )}
                         <div className={styles.mergeFooter} style={{ marginTop: 14, justifyContent: 'center' }}>
                           <div style={{ display: 'flex', justifyContent: 'center', width: '100%' }}>
-                            {succeededCount >= 1 && (
+                            {/* 已经有成片时，这个按钮挪到下面「新窗口打开」右边去了 */}
+                            {succeededCount >= 1 && !mergedVideoUrl && (
                               <button type="button" onClick={handleMerge} disabled={merging || !canMerge}
                                 className={styles.btnSmGreen} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '7px 32px', fontSize: 15, fontWeight: 600, borderRadius: 10 }}>
-                                {merging ? <><span className={styles.spinner} style={{ borderColor: '#bbf7d0', borderTopColor: '#16a34a' }} />合并中…</> : `${mergedVideoUrl ? '重新生成' : '分镜合并'}(分镜视频+字幕+${videoType === 'narration' ? '配音' : '对白原声'})`}
+                                {merging ? <><span className={styles.spinner} style={{ borderColor: '#bbf7d0', borderTopColor: '#16a34a' }} />合并中…</> : `${mergedVideoUrl ? '重新生成' : '分镜合并'}(分镜视频+字幕+对白原声)`}
                               </button>
                             )}
                           </div>
@@ -3135,16 +3575,21 @@ export default function VoiceoverPage() {
                         {mergeError && <p className={styles.errInline} style={{ marginTop: 8 }}>{mergeError}</p>}
                         {mergedVideoUrl && (
                           <div className={styles.mergedResult}>
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                              <p className={styles.mergedTitle} style={{ margin: 0 }}>最终视频（点击放大）</p>
-                              <div style={{ display: 'flex', gap: 6 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
+                              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
                                 <a href={mergedVideoUrl} download className={`${styles.btnOutline} ${styles.btnOutlineGreen}`} style={{ textDecoration: 'none', padding: '4px 10px', fontSize: 12 }}>下载</a>
                                 <a href={mergedVideoUrl} target="_blank" rel="noopener noreferrer"
                                   className={`${styles.btnOutline} ${styles.btnOutlineGreen}`} style={{ textDecoration: 'none', padding: '4px 10px', fontSize: 12 }}>新窗口打开</a>
+                                {/* 重新合并会覆盖现在这条成片，先确认 */}
+                                <button type="button" disabled={merging || !canMerge}
+                                  onClick={() => { if (window.confirm('已经有一条合成好的最终视频，重新生成会用新的覆盖它。确定继续？')) handleMerge(); }}
+                                  className={styles.btnSmGreen} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 12px', fontSize: 12, borderRadius: 6 }}>
+                                  {merging ? <><span className={styles.spinner} style={{ borderColor: '#bbf7d0', borderTopColor: '#16a34a' }} />合并中…</> : '重新生成(分镜视频+字幕+对白)'}
+                                </button>
                               </div>
                             </div>
                             <video src={mergedVideoUrl} muted autoPlay loop className={styles.mergedVideo}
-                              style={{ maxWidth: 320, maxHeight: 200, borderRadius: 8, cursor: 'pointer', display: 'block', margin: '0 auto' }}
+                              style={{ maxWidth: 320, maxHeight: 200, borderRadius: 8, cursor: 'pointer', display: 'block', margin: 0 }}
                               onClick={() => window.open(mergedVideoUrl, '_blank')} />
                           </div>
                         )}
@@ -3352,6 +3797,66 @@ export default function VoiceoverPage() {
         </div>
       )}
 
+      {/* AI改写对白剧本浮窗：上半是当前剧本（改写中切成流式预览），下半是改写要求输入框。
+          流式预览没被采用之前不覆盖正文，避免改写跑偏还是把原稿搭进去。 */}
+      {rewriteOpen && typeof document !== 'undefined' && createPortal(
+        <div onClick={closeRewriteModal} className={styles.libOverlay}>
+          <div onClick={e => e.stopPropagation()} className={styles.libSheet} style={{ width: 'min(640px, 96vw)' }}>
+            <div className={styles.libHeader}>
+              <strong style={{ fontSize: 14 }} className={styles.libTitle}>AI改写对白剧本</strong>
+              <button type="button" onClick={closeRewriteModal} disabled={rewritingScript}
+                style={{ background: 'none', border: 'none', fontSize: 20, color: rewritingScript ? '#e5e7eb' : '#9ca3af', cursor: rewritingScript ? 'not-allowed' : 'pointer', lineHeight: 1, padding: '0 4px' }}>×</button>
+            </div>
+
+            <div className={styles.libBody} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div>
+                <p style={{ fontSize: 12, color: '#6b7280', margin: '0 0 4px' }}>
+                  {rewritingScript ? '正在按要求改写…' : (rewritePreview ? '改写结果（未采用前不影响正文）' : '当前对白剧本')}
+                </p>
+                <textarea
+                  ref={rewritePreviewBoxRef}
+                  readOnly
+                  value={rewritingScript || rewritePreview ? rewritePreview : dialogueScript}
+                  rows={12}
+                  className={styles.textarea}
+                  style={{ fontSize: 12, fontFamily: 'inherit', lineHeight: 1.7, background: '#f9fafb' }}
+                />
+              </div>
+
+              <div>
+                <p style={{ fontSize: 12, color: '#6b7280', margin: '0 0 4px' }}>改写要求</p>
+                <textarea
+                  value={rewriteInstruction}
+                  onChange={e => setRewriteInstruction(e.target.value)}
+                  disabled={rewritingScript}
+                  rows={3}
+                  placeholder="例如：把结尾改成开放式结局 / 给男主角加一句反驳的台词 / 把语气改得更轻松一点…"
+                  className={styles.textarea}
+                  style={{ fontSize: 13, fontFamily: 'inherit' }}
+                />
+                {rewriteError && <p style={{ fontSize: 12, color: '#dc2626', margin: '4px 0 0' }}>{rewriteError}</p>}
+              </div>
+            </div>
+
+            <div className={styles.libFoot} style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'flex-end' }}>
+              {rewritePreview && !rewritingScript && (
+                <button type="button" onClick={applyRewrittenScript}
+                  style={{ fontSize: 13, padding: '6px 14px', borderRadius: 6, border: '1px solid #16a34a', background: '#f0fdf4', color: '#16a34a', cursor: 'pointer', fontWeight: 500 }}>
+                  采用改写结果
+                </button>
+              )}
+              <button type="button" onClick={handleRewriteScript}
+                disabled={rewritingScript || !rewriteInstruction.trim()}
+                style={{ fontSize: 13, padding: '6px 14px', borderRadius: 6, border: '1px solid #7c3aed', background: rewritingScript ? '#f5f3ff' : '#fff', color: '#7c3aed', cursor: (rewritingScript || !rewriteInstruction.trim()) ? 'not-allowed' : 'pointer', fontWeight: 500, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                {rewritingScript && <span className={styles.spinner} style={{ width: 11, height: 11, borderColor: '#ddd6fe', borderTopColor: '#7c3aed' }} />}
+                {rewritingScript ? '改写中…' : (rewritePreview ? '重新改写' : '改写')}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
       {/* 素材库浮窗：方舟体验中心的预设素材，点一下就进「参考素材」拿到 @视频N / @音频N / @图片N 编号。
           经 createPortal 挂到 body —— 页面有 sticky 头部和 overflow 容器，挂在原处会被裁掉。 */}
       {libOpen && typeof document !== 'undefined' && createPortal(
@@ -3374,13 +3879,27 @@ export default function VoiceoverPage() {
             </div>
 
             <div className={styles.libBody}>
+              <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+                <input
+                  value={libUrlInput}
+                  onChange={e => setLibUrlInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') addUrlMedia(libTab, libUrlInput); }}
+                  placeholder={`粘贴${MEDIA_ZH[libTab]}直链（http/https），回车或点添加`}
+                  style={{ flex: 1, fontSize: 12, padding: '6px 8px', border: '1px solid #e5e7eb', borderRadius: 4 }}
+                />
+                <button type="button" onClick={() => addUrlMedia(libTab, libUrlInput)} disabled={!libUrlInput.trim()}
+                  style={{ fontSize: 12, padding: '0 12px', border: '1px solid #0891b2', borderRadius: 4, background: '#fff', color: libUrlInput.trim() ? '#0891b2' : '#a5f3fc', cursor: libUrlInput.trim() ? 'pointer' : 'default', flexShrink: 0 }}>
+                  添加
+                </button>
+              </div>
               {(() => {
                 const match = (name: string, category: string) => {
                   const q = libQuery.trim();
                   if (!q) return true;
                   return q.split(/\s+/).every(w => name.includes(w) || category.includes(w));
                 };
-                const picked = (url: string) => mediaItems.some(m => m.url === url);
+                // 存量素材可能存着 %XX 转义版的同一条地址，比对前归一
+                const picked = (url: string) => mediaItems.some(m => prettyUrl(m.url || '') === url);
 
                 if (libTab === 'audio') {
                   const list = voicePresets.filter(v => match(v.name, v.category));
@@ -3422,7 +3941,71 @@ export default function VoiceoverPage() {
 
             <div className={styles.libFoot}>
               点一下即加入「参考素材」，编号按加入顺序排（@视频N / @音频N / @图片N）。
-              上限：图 {MEDIA_LIMITS.image} / 视频 {MEDIA_LIMITS.video} / 音频 {MEDIA_LIMITS.audio}。
+              上限：图 {mediaLimit('image')}（角色头像已占 {subjectImageCount} 个）/ 视频 {mediaLimit('video')} / 音频 {mediaLimit('audio')}。
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* 换头像浮窗：真人头像（认证，只能经活体验证入库）/ 虚拟头像 两个 tab，同样经 createPortal 挂到 body */}
+      {avatarPickerIdx !== null && typeof document !== 'undefined' && createPortal(
+        <div onClick={() => setAvatarPickerIdx(null)} className={styles.libOverlay}>
+          <div onClick={e => e.stopPropagation()} className={styles.libSheet}>
+            <div className={styles.libHeader}>
+              <strong style={{ fontSize: 14 }} className={styles.libTitle}>换头像</strong>
+              <button type="button" onClick={refreshAvatars} disabled={avatarLoading}
+                style={{ fontSize: 11, padding: '3px 8px', border: '1px solid #e5e7eb', borderRadius: 4, background: '#fff', color: avatarLoading ? '#c4b5fd' : '#7c3aed', cursor: avatarLoading ? 'default' : 'pointer' }}>
+                {avatarLoading ? '刷新中…' : '刷新'}
+              </button>
+              <button type="button" onClick={() => setAvatarPickerIdx(null)}
+                style={{ background: 'none', border: 'none', fontSize: 20, color: '#9ca3af', cursor: 'pointer', lineHeight: 1, padding: '0 4px' }}>×</button>
+              <span className={styles.libTabs}>
+                {([['real', `真人头像 ${realAvatars.length}`], ['virtual', `虚拟头像 ${virtualAvatars.length}`]] as const).map(([k, label]) => (
+                  <button key={k} type="button" onClick={() => { setAvatarPickerTab(k); setAvatarSearch(''); }}
+                    style={{ fontSize: 12, padding: '4px 12px', borderRadius: 999, cursor: 'pointer', whiteSpace: 'nowrap', border: avatarPickerTab === k ? '1px solid #7c3aed' : '1px solid #e5e7eb', background: avatarPickerTab === k ? '#f5f3ff' : '#fff', color: avatarPickerTab === k ? '#7c3aed' : '#6b7280' }}>
+                    {label}
+                  </button>
+                ))}
+              </span>
+              <input value={avatarSearch} onChange={e => setAvatarSearch(e.target.value)} placeholder="搜索头像名称…"
+                className={styles.libSearch} />
+            </div>
+
+            <div className={styles.libBody}>
+              {(() => {
+                const list = avatarPickerTab === 'real' ? realAvatars : virtualAvatars;
+                const q = avatarSearch.trim();
+                const filtered = q ? list.filter(a => (a.Name || '').includes(q)) : list;
+                if (filtered.length === 0) {
+                  return (
+                    <p style={{ fontSize: 12, color: '#9ca3af' }}>
+                      暂无{avatarPickerTab === 'real' ? '真人' : '虚拟'}头像，先到{' '}
+                      <a href={avatarPickerTab === 'real' ? '/assets/real' : '/assets/virtual'} style={{ color: '#7c3aed' }}>资源管理</a> 添加
+                    </p>
+                  );
+                }
+                return (
+                  <div className={styles.libGrid}>
+                    {filtered.map(asset => {
+                      const thumb = asset.PreviewUrl || asset._thumbnail_url || asset.URL;
+                      return (
+                        <div key={asset.Id} onClick={() => assignAssetAvatar(avatarPickerIdx as number, asset)}
+                          style={{ cursor: 'pointer', borderRadius: 6, overflow: 'hidden', border: '1px solid #e5e7eb', background: '#f9fafb' }}>
+                          {thumb
+                            ? <img src={thumb} alt={asset.Name || ''} loading="lazy" style={{ width: '100%', aspectRatio: '3 / 4', objectFit: 'cover', display: 'block', background: '#e5e7eb' }} />
+                            : <div style={{ width: '100%', aspectRatio: '3 / 4', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22 }}>👤</div>}
+                          <div style={{ padding: '4px 6px', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{asset.Name || asset.Id.slice(0, 8)}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+            </div>
+
+            <div className={styles.libFoot}>
+              只显示已认证的真人头像（经活体验证入库）和虚拟头像，点一下即为该角色换头像。
             </div>
           </div>
         </div>,

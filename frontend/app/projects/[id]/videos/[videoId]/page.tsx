@@ -46,7 +46,7 @@ export default function VideoEditorPage() {
   const [ratio, setRatio] = useState('9:16');
   const [voice, setVoice] = useState('zh-CN-YunfengNeural');
   const [model, setModel] = useState('doubao-seedance-2-0');
-  const [region, setRegion] = useState<'overseas' | 'cn'>('cn');
+  const [region, setRegion] = useState<'overseas' | 'cn'>('overseas');
   const [initing, setIniting] = useState(false);
   const [sbSettings, setSbSettings] = useState<StoryboardSettings>(DEFAULT_STORYBOARD_SETTINGS);
   const [generating, setGenerating] = useState<Set<string>>(new Set());

@@ -1,6 +1,7 @@
 'use strict'
 
 const { query } = require('../db')
+const { QUOTA_ENFORCED } = require('../lib/quota')
 
 const SSO_BASE_URL = (process.env.SSO_BASE_URL || 'https://mo.xingke888.com').replace(/\/$/, '')
 
@@ -21,6 +22,8 @@ async function authRoutes(fastify) {
         avatar: user.avatar,
         quota: user.quota,
         used: user.used,
+        // 关着就是不限制 —— 页面据此把「剩余 N 次」显示成「次数不限」
+        quota_enforced: QUOTA_ENFORCED,
       },
     }
   })

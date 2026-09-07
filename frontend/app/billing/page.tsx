@@ -27,6 +27,7 @@ interface UserInfo {
   name: string;
   quota: number;
   used: number;
+  quota_enforced?: boolean;   // false = 目前不限制（后端 lib/quota.js）
 }
 
 interface Plan {
@@ -359,7 +360,9 @@ export default function BillingPage() {
           </div>
           <div style={{ flex: 1, minWidth: 0, background: '#fff', border: '1px solid #e5e7eb', borderRadius: 8, padding: '10px 14px' }}>
             <div style={{ fontSize: 11, color: '#6b7280' }}>剩余次数</div>
-            <div style={{ fontSize: 18, fontWeight: 700, color: user.quota - user.used > 0 ? '#16a34a' : '#dc2626' }}>{user.quota - user.used} <span style={{ fontSize: 12, fontWeight: 400, color: '#9ca3af' }}>/ {user.quota}</span></div>
+            {user.quota_enforced === false
+              ? <div style={{ fontSize: 18, fontWeight: 700, color: '#16a34a' }}>不限制</div>
+              : <div style={{ fontSize: 18, fontWeight: 700, color: user.quota - user.used > 0 ? '#16a34a' : '#dc2626' }}>{user.quota - user.used} <span style={{ fontSize: 12, fontWeight: 400, color: '#9ca3af' }}>/ {user.quota}</span></div>}
           </div>
           <div style={{ flex: 1, minWidth: 0, background: '#fff', border: '1px solid #e5e7eb', borderRadius: 8, padding: '10px 14px' }}>
             <div style={{ fontSize: 11, color: '#6b7280' }}>已使用</div>

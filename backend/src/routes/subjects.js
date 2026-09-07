@@ -9,13 +9,26 @@ async function subjectRoutes(fastify) {
 
   // ─── Project Subject Library CRUD ──────────────────────────────────────────
 
+  // `?used=1`：只返回**本项目的视频真正用到的角色**（video_subjects 引用过的），
+  // 每行带 `video_count`（用在几条视频里）。项目页的「角色」列表就是这一份 ——
+  // 角色由视频自己添加（voiceover-v3 换头像），项目页展示的是它们的并集，
+  // 而不是历史上建过的每一行。不带这个参数仍返回全量（voiceover-v3 要拿全量去查重复用）。
   fastify.get('/projects/:projectId/subjects', async (request, reply) => {
     const { projectId } = request.params
+    const usedOnly = ['1', 'true', 'yes'].includes(String(request.query?.used || '').toLowerCase())
     try {
       const proj = await query(`SELECT id FROM projects WHERE id=$1 AND user_id=$2`, [projectId, request.user.id])
       if (proj.rows.length === 0) return reply.code(404).send({ success: false, error: '项目不存在' })
       const result = await query(
-        `SELECT * FROM project_subjects WHERE project_id=$1 ORDER BY sort_order ASC, created_at ASC`,
+        usedOnly
+          ? `SELECT ps.*, count(DISTINCT vs.video_id)::int AS video_count
+               FROM project_subjects ps
+               JOIN video_subjects vs ON vs.subject_id = ps.id
+               JOIN videos v ON v.id = vs.video_id AND v.project_id = ps.project_id
+              WHERE ps.project_id = $1
+              GROUP BY ps.id
+              ORDER BY ps.sort_order ASC, ps.created_at ASC`
+          : `SELECT * FROM project_subjects WHERE project_id=$1 ORDER BY sort_order ASC, created_at ASC`,
         [projectId]
       )
       return { success: true, data: result.rows }
@@ -31,6 +44,17 @@ async function subjectRoutes(fastify) {
     try {
       const proj = await query(`SELECT id FROM projects WHERE id=$1 AND user_id=$2`, [projectId, request.user.id])
       if (proj.rows.length === 0) return reply.code(404).send({ success: false, error: '项目不存在' })
+
+      // 同一个 Asset ID 在一个项目里只留一行：换头像是「挑一张已入库的头像」，
+      // 不是「每点一次就建一个新角色」—— 前端曾经每次都 POST，项目角色列表堆成
+      // 十几个同名同图的重复项。已有就直接把那行还回去（幂等）。
+      if (asset_id) {
+        const dup = await query(
+          `SELECT * FROM project_subjects WHERE project_id=$1 AND asset_id=$2 ORDER BY created_at, id LIMIT 1`,
+          [projectId, asset_id]
+        )
+        if (dup.rows.length > 0) return { success: true, data: dup.rows[0] }
+      }
 
       const sortResult = await query(`SELECT COALESCE(MAX(sort_order),0)+1 AS next FROM project_subjects WHERE project_id=$1`, [projectId])
       const result = await query(

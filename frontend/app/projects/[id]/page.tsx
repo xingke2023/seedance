@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import Link from 'next/link';
 import { api } from '@/lib/api';
 import { ProjectSubject } from '@/components/video-editor/types';
 import styles from './page.module.css';
@@ -468,6 +467,10 @@ const AI_EDIT_PROMPTS: Record<string, string[]> = {
     '加上数据流粒子',
   ],
 };
+// 项目页不再显示「角色」栏：角色由每条视频自己添加（voiceover-v3 角色卡上「换头像」），
+// 项目页这份只是所有视频用到的角色的汇总，平时用不到。整段渲染留着，改回 true 就回来。
+const SHOW_SUBJECT_SECTION = false;
+
 
 export default function ProjectDetailPage() {
   const params = useParams();
@@ -507,8 +510,11 @@ export default function ProjectDetailPage() {
   const [aiPromptSeed, setAiPromptSeed] = useState(0);
   const [aiPromptTab, setAiPromptTab] = useState('');
   const [subjectPage, setSubjectPage] = useState(0);
+  // 角色这一栏默认折叠：它是本项目所有视频用到的角色的汇总，平时不用看，别把视频列表挤下去
+  const [subjectsOpen, setSubjectsOpen] = useState(false);
   const [videoPage, setVideoPage] = useState(0);
-  const PAGE_SIZE = 10;
+  const PAGE_SIZE = 10;          // 角色栏（当前隐藏）
+  const VIDEO_PAGE_SIZE = 5;     // 视频列表每页 5 条
   const aiBottomRef = useRef<HTMLDivElement>(null);
   const aiFileRef = useRef<HTMLInputElement>(null);
   const aiIdRef = useRef(0);
@@ -520,7 +526,7 @@ export default function ProjectDetailPage() {
     setSubjectPage(p => Math.min(p, Math.max(0, Math.ceil(subjects.length / PAGE_SIZE) - 1)));
   }, [subjects.length]);
   useEffect(() => {
-    setVideoPage(p => Math.min(p, Math.max(0, Math.ceil(videos.length / PAGE_SIZE) - 1)));
+    setVideoPage(p => Math.min(p, Math.max(0, Math.ceil(videos.length / VIDEO_PAGE_SIZE) - 1)));
   }, [videos.length]);
 
   function fileToBase64(file: File): Promise<string> {
@@ -591,7 +597,10 @@ export default function ProjectDetailPage() {
       const [proj, vids, subs] = await Promise.all([
         api.get<Project>(`/projects/${projectId}`),
         api.get<Video[]>(`/projects/${projectId}/videos`),
-        api.get<ProjectSubject[]>(`/projects/${projectId}/subjects`),
+        // 「角色」= **本项目所有视频用到的角色的并集**（?used=1 只返回被 video_subjects
+        // 引用过的行，带 video_count）。角色由视频自己添加（voiceover-v3 换头像），
+        // 这里不再是入口，展示的自然也不该是历史上建过的每一行。
+        api.get<ProjectSubject[]>(`/projects/${projectId}/subjects?used=1`),
       ]);
       setProject(proj);
       setVideos(vids || []);
@@ -721,25 +730,74 @@ export default function ProjectDetailPage() {
     } catch {}
   }
 
-  if (loading) return <div style={{ padding: 40, textAlign: 'center', color: '#6b7280' }}>加载中...</div>;
-  if (!project) return <div style={{ padding: 40, textAlign: 'center', color: '#6b7280' }}>项目不存在</div>;
+  if (loading) return (
+    <div className={styles.shell}>
+      <div className={styles.container}>
+        <div className={styles.skeletonHero} />
+        <div className={styles.videoList}>
+          <div className={styles.skeleton} />
+          <div className={styles.skeleton} />
+          <div className={styles.skeleton} />
+        </div>
+      </div>
+    </div>
+  );
+  if (!project) return (
+    <div className={styles.shell}>
+      <div className={styles.container}>
+        <div className={styles.empty}>
+          <div className={styles.emptyIcon}>🔍</div>
+          <div>项目不存在</div>
+          <div className={styles.emptyHint}>它可能已被删除</div>
+        </div>
+      </div>
+    </div>
+  );
+
+  const shotTotal = videos.reduce((sum, v) => sum + (v.shot_count || 0), 0);
+  const doneCount = videos.filter(v => v.status === 'done').length;
 
   return (
-    <>
-      <div className={styles.breadcrumb}>
-        <Link href="/projects" style={{ padding: '2px 4px' }}>项目库</Link>
-        <span className={styles.sep}>&gt;</span>
-        <span style={{ padding: '2px 4px' }}>{project.name}</span>
-      </div>
+    <div className={styles.shell}>
     <div className={styles.container}>
 
-      {/* Subject Library */}
+      <div className={styles.hero}>
+        <div className={styles.heroTop}>
+          <h1 className={styles.projTitle}>{project.name}</h1>
+          {project.description && <div className={styles.projDesc}>{project.description}</div>}
+        </div>
+        <div className={styles.heroStats}>
+          <div className={styles.stat}>
+            <div className={styles.statNum}>{videos.length}</div>
+            <div className={styles.statLabel}>视频</div>
+          </div>
+          <div className={styles.stat}>
+            <div className={styles.statNum}>{shotTotal}</div>
+            <div className={styles.statLabel}>分镜</div>
+          </div>
+          <div className={styles.stat}>
+            <div className={styles.statNum}>{doneCount}</div>
+            <div className={styles.statLabel}>已完成</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Subject Library —— 默认隐藏，见 SHOW_SUBJECT_SECTION */}
+      {SHOW_SUBJECT_SECTION && (
       <section className={styles.subjectSection}>
-        <div className={styles.subjectHeader}>
-          <h2 className={styles.subjectTitle}>角色 ({subjects.length}个)</h2>
-          <button className={styles.addSubjectBtn} onClick={() => setShowAddSubject(true)}>+ 添加角色</button>
+        <div className={styles.subjectHeader} onClick={() => setSubjectsOpen(o => !o)}
+          style={{ cursor: 'pointer', userSelect: 'none' }}>
+          <h2 className={styles.subjectTitle}>
+            <span style={{ display: 'inline-block', width: 14, color: '#9ca3af', transform: subjectsOpen ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }}>▶</span>
+            角色 ({subjects.length}个)
+          </h2>
+          {/* 「+ 添加角色」入口已去掉 —— 角色统一在 voiceover-v3 的角色卡上「换头像」时产生
+              （`assignAssetAvatar`，同一个 Asset ID 只建一行）。这里只看和改已有的角色。
+              下面那整套添加表单（真人/虚拟/备用库/AI创作角色）仍由 showAddSubject 控制，
+              留着没删：要再开出来，把这个按钮加回来即可。 */}
         </div>
 
+        {subjectsOpen && (<>
         {showAddSubject && (
           <div className={styles.addSubjectForm}>
             <div className={styles.addModeTabs}>
@@ -1022,6 +1080,12 @@ export default function ProjectDetailPage() {
           </div>
         )}
 
+        {subjects.length === 0 && (
+          <p style={{ fontSize: 13, color: '#9ca3af', margin: '4px 0 12px' }}>
+            本项目的视频还没有用到任何角色 —— 角色在视频里添加（打开一条视频，在角色卡上「换头像」），这里汇总所有视频用到的角色。
+          </p>
+        )}
+
         {subjects.length > 0 && (
           <>
           <div className={styles.subjectGrid}>
@@ -1036,6 +1100,9 @@ export default function ProjectDetailPage() {
                   )}
                 </div>
                 <span className={styles.subjectGridName}>{subject.label}</span>
+                {typeof subject.video_count === 'number' && (
+                  <span style={{ fontSize: 11, color: '#9ca3af' }}>用于 {subject.video_count} 条视频</span>
+                )}
               </div>
             ))}
           </div>
@@ -1146,13 +1213,15 @@ export default function ProjectDetailPage() {
             </div>
           );
         })()}
+        </>)}
       </section>
+      )}
 
       {/* Video List */}
       <section className={styles.videoSection}>
         <div className={styles.subjectHeader}>
-          <h2 className={styles.subjectTitle}>本项目的视频 ({videos.length}个)</h2>
-          <button className={styles.addSubjectBtn} onClick={() => setShowCreate(true)}>+ 添加视频</button>
+          <h2 className={styles.subjectTitle}>本项目的视频</h2>
+          <button className={styles.addVideoBtn} onClick={() => setShowCreate(true)}>+ 添加视频</button>
         </div>
 
         {showCreate && (
@@ -1176,25 +1245,29 @@ export default function ProjectDetailPage() {
 
         {videos.length === 0 ? (
           <div className={styles.empty}>
+            <div className={styles.emptyIcon}>🎬</div>
             <div>还没有视频</div>
             <div className={styles.emptyHint}>点击「添加视频」开始创作</div>
           </div>
       ) : (
         <>
         <div className={styles.videoList}>
-          {videos.slice(videoPage * PAGE_SIZE, (videoPage + 1) * PAGE_SIZE).map((video, idx) => {
+          {videos.slice(videoPage * VIDEO_PAGE_SIZE, (videoPage + 1) * VIDEO_PAGE_SIZE).map((video, idx) => {
             const status = STATUS_MAP[video.status] || STATUS_MAP.draft;
             return (
               <div key={video.id} className={styles.videoCard} onClick={() => router.push(`/voiceover-v3?projectId=${projectId}&videoId=${video.id}`)}>
-                <span className={styles.indexBadge}>视频{videoPage * PAGE_SIZE + idx + 1}</span>
+                <div className={styles.videoNo}>
+                  {videoPage * VIDEO_PAGE_SIZE + idx + 1}
+                  <span className={styles.videoNoLabel}>视频</span>
+                </div>
                 <div className={styles.videoInfo}>
                   <div className={styles.videoName}>{video.name}</div>
                   <div className={styles.videoMeta}>
                     <span className={styles.badge} style={{ color: status.color, background: status.bg }}>
                       {status.label}
                     </span>
-                    <span>{video.shot_count} 个分镜</span>
-                    <span>{video.ratio}</span>
+                    <span className={styles.chip}>{video.shot_count} 分镜</span>
+                    <span className={styles.chip}>{video.ratio}</span>
                   </div>
                   {video.script && (
                     <div className={styles.videoScript}>{video.script.slice(0, 80)}{video.script.length > 80 ? '...' : ''}</div>
@@ -1207,19 +1280,23 @@ export default function ProjectDetailPage() {
             );
           })}
         </div>
-        {videos.length > PAGE_SIZE && (
+        {videos.length > VIDEO_PAGE_SIZE && (
           <div className={styles.mobilePagination}>
             <button onClick={() => setVideoPage(p => Math.max(0, p - 1))} disabled={videoPage === 0}
               className={`${styles.pageBtn} ${videoPage === 0 ? styles.pageBtnDisabled : ''}`}>上一页</button>
-            <span className={styles.pageInfo}>{videoPage + 1} / {Math.ceil(videos.length / PAGE_SIZE)}</span>
-            <button onClick={() => setVideoPage(p => Math.min(Math.ceil(videos.length / PAGE_SIZE) - 1, p + 1))} disabled={videoPage >= Math.ceil(videos.length / PAGE_SIZE) - 1}
-              className={`${styles.pageBtn} ${videoPage >= Math.ceil(videos.length / PAGE_SIZE) - 1 ? styles.pageBtnDisabled : ''}`}>下一页</button>
+            <span className={styles.pageInfo}>{videoPage + 1} / {Math.ceil(videos.length / VIDEO_PAGE_SIZE)}</span>
+            <button onClick={() => setVideoPage(p => Math.min(Math.ceil(videos.length / VIDEO_PAGE_SIZE) - 1, p + 1))} disabled={videoPage >= Math.ceil(videos.length / VIDEO_PAGE_SIZE) - 1}
+              className={`${styles.pageBtn} ${videoPage >= Math.ceil(videos.length / VIDEO_PAGE_SIZE) - 1 ? styles.pageBtnDisabled : ''}`}>下一页</button>
           </div>
         )}
         </>
       )}
       </section>
     </div>
-    </>
+
+      <button className={styles.fab} onClick={() => setShowCreate(true)} title="添加视频">
+        +
+      </button>
+    </div>
   );
 }

@@ -8,8 +8,9 @@
 // 画面里的人说的还是旧词，烧上去的字幕是新词。
 //
 // 所以提交生成任务时再对齐一次：字幕是准的，台词块跟着它重建。
-// 音色行（`X 使用 @音频1 …的音色说话` / `Voice of X: …`）保留不动 —— 那是音色锁，
-// 一改音色就漂。
+// 块开头那几行（说话人身份对应 `<主体1>（即 @图片1 中的人物，音色取自 @音频1）`、
+// 音色锁 `X 使用 @音频1 …的音色说话` / `Voice of X: …`）**原样保留** —— 身份和音色
+// 都不该跟着字幕改；音色措辞一改，同一个角色逐镜的嗓子就漂了。
 
 const str = v => String(v ?? '').trim()
 
@@ -24,8 +25,9 @@ const BLOCK_START = /\n{1,2}(?:Dialogue \(spoken aloud on camera|Off-screen voic
 
 // 一行台词：`X says: “…”`，动词有 says / replies / continues
 const SPEECH_LINE = /^(.*?)\s+(?:says|replies|continues)\s*[:：]\s*[“"](.*)[”"]\s*$/
-// 音色行：中文那句「使用 @音频N …的音色说话」或英文 `Voice of X: …`
-const VOICE_LINE  = /(使用\s*@音频\s*\d+|^Voice of )/
+// 块里除台词行以外的行（身份对应行、音色行）—— 逐条按原样搬回重建后的块里。
+// 不再用「长得像音色行」的正则去挑：身份对应行也是这种非台词行，
+// 与其为每一种新写法加一条正则，不如把「不是台词的都留着」当规则。
 
 // 只比可读内容，标点空白不算 —— 改个标点不该触发重建
 const norm = t => String(t || '').replace(/[\s\p{P}\p{S}]/gu, '')
@@ -39,8 +41,8 @@ function splitBlocks(prompt) {
 
 // 从已有台词块里把音色行和说话人捞出来（重建时要沿用）
 function parseBlocks(blocks) {
-  const voiceDialogue = []
-  const voiceNarration = []
+  const headDialogue = []
+  const headNarration = []
   const speakers = { dialogue: [], narration: [] }
   const texts = []
   let kind = null
@@ -57,14 +59,14 @@ function parseBlocks(blocks) {
       if (who && !speakers[kind].includes(who)) speakers[kind].push(who)
       continue
     }
-    if (VOICE_LINE.test(line)) (kind === 'dialogue' ? voiceDialogue : voiceNarration).push(line)
+    ;(kind === 'dialogue' ? headDialogue : headNarration).push(line)
   }
-  return { voiceDialogue, voiceNarration, speakers, spokenText: texts.join('') }
+  return { headDialogue, headNarration, speakers, spokenText: texts.join('') }
 }
 
-function buildBlock(head, voiceLines, speaker, lines) {
+function buildBlock(head, headLines, speaker, lines) {
   const speech = lines.map((t, i) => `${speaker} ${i === 0 ? 'says' : 'continues'}: “${t}”`)
-  return `${head}\n${[...voiceLines, ...speech].join('\n')}`
+  return `${head}\n${[...headLines, ...speech].join('\n')}`
 }
 
 // 字幕按句号问号感叹号断句，一句一行 —— 和字幕烧上去的断法无关，只是别把一大段挤成一行
@@ -102,17 +104,21 @@ function syncSpeechWithSubtitle(prompt, subtitle, opts = {}) {
     || (isNarration ? 'narrator' : `<主体${subjectTag ? subjectTag[1] : 1}>`)
   const speaker = (isNarration ? parsed.speakers.narration[0] : parsed.speakers.dialogue[0]) || fallback
 
-  // 音色行：原来那段有就沿用；没有（存量分镜、旁白从前根本不进 prompt）就按角色绑定补一句 ——
-  // 每一镜都是独立生成，缺了这句，同一个角色逐镜就是不同的嗓子
-  let voiceLines = isNarration ? parsed.voiceNarration : parsed.voiceDialogue
-  if (voiceLines.length === 0 && !isNarration && subjectTag && typeof opts.voiceOf === 'function') {
-    const line = opts.voiceOf(Number(subjectTag[1]), speaker)
-    if (line) voiceLines = [line]
+  // 块开头那几行（身份对应 + 音色）：原来那段有就原样沿用；没有（存量分镜、旁白从前
+  // 根本不进 prompt）就按角色绑定补上 —— 每一镜都是独立生成，缺了这两句，
+  // 模型既不知道这个标签指的是哪张图，也会给同一个角色逐镜配不同的嗓子
+  let headLines = isNarration ? parsed.headNarration : parsed.headDialogue
+  if (headLines.length === 0 && !isNarration && subjectTag) {
+    const no = Number(subjectTag[1])
+    headLines = [
+      typeof opts.identityOf === 'function' ? opts.identityOf(no, speaker) : '',
+      typeof opts.voiceOf    === 'function' ? opts.voiceOf(no, speaker)    : '',
+    ].filter(Boolean)
   }
 
   const block = isNarration
-    ? buildBlock(VOICEOVER_HEAD, voiceLines, speaker, lines)
-    : buildBlock(DIALOGUE_HEAD, voiceLines, speaker, lines)
+    ? buildBlock(VOICEOVER_HEAD, headLines, speaker, lines)
+    : buildBlock(DIALOGUE_HEAD, headLines, speaker, lines)
   return `${body}\n\n${block}`
 }
 

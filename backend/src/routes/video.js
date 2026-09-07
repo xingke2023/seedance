@@ -12,6 +12,8 @@ const { UPLOAD_ROOT } = require('../lib/uploads')
 const { query } = require('../db')
 const { parseSubjectDefs, lockSubjectAnchors } = require('../prompt/anchor')
 const { syncSpeechWithSubtitle } = require('../prompt/speech')
+const { CN_ONLY } = require('../lib/region')
+const { QUOTA_ENFORCED } = require('../lib/quota')
 
 const execFileAsync = promisify(execFile)
 const VIDEO_CACHE = path.join(UPLOAD_ROOT, '.video-cache')
@@ -67,6 +69,15 @@ const FIDELITYAI_PATH = '/api/v3/contents/generations/tasks'
 const FIDELITY_CN_BASE_URL = process.env.FIDELITY_CN_BASE_URL || 'https://vidgen.fidelityai.cn'
 const FIDELITY_CN_API_SK = process.env.FIDELITY_CN_API_SK
 
+// 火山方舟直连不认「doubao-seedance-2-0」这种不带版本号的通用名——
+// FidelityAI 代理会帮你转换成账号下实际可用的带版本号 ID，直连时得自己补上。
+// 版本号来自 GET /api/v3/models 在这个 ARK_API_KEY 账号下实测可用的那几个
+const ARK_MODEL_REMAP = {
+  'doubao-seedance-2-0':      'doubao-seedance-2-0-260128',
+  'doubao-seedance-2-0-fast': 'doubao-seedance-2-0-fast-260128',
+  'doubao-seedance-2-5':      'doubao-seedance-2-5-260628',
+}
+
 function normaliseApiUrl(url) {
   if (!url) return url
   const u = url.replace(/\/$/, '')
@@ -81,7 +92,11 @@ function autoCallbackUrl() {
 }
 
 function resolveRegionOverrides(region) {
-  if (region === 'cn' && FIDELITY_CN_API_SK) {
+  // 只用国内站模式：不管前端传的 region 是什么（包括默认的 undefined/'overseas'），
+  // 一律走国内站——这是唯一会强制覆盖调用方显式选择的地方，其它 region==='cn' 分支
+  // 仍按用户手动选择走。
+  if (CN_ONLY || region === 'cn') {
+    if (!FIDELITY_CN_API_SK) throw new Error('已开启仅国内站模式，但未配置 FIDELITY_CN_API_SK')
     return {
       apiKey: FIDELITY_CN_API_SK,
       apiUrl: normaliseApiUrl(FIDELITY_CN_BASE_URL),
@@ -143,9 +158,12 @@ async function videoRoutes(fastify) {
     schema: {
       body: {
         type: 'object',
-        required: ['prompt'],
         properties: {
           prompt:        { type: 'string', minLength: 1, maxLength: 5000 },
+          // 手改「查看提交 JSON」时带上——有它就整个跳过 prompt/orderedMedia 拼装和
+          // 锚定锁/字幕对台词，原样交给 Seedance（用户已经在框里看到最终会发的样子）
+          content:       { type: 'array', maxItems: 32 },
+          tools:         { type: 'array', maxItems: 4 },
           images:        { type: 'array', items: mediaItemSchema, maxItems: 8 },
           videos:        { type: 'array', items: mediaItemSchema, maxItems: 4 },
           audios:        { type: 'array', items: mediaItemSchema, maxItems: 4 },
@@ -175,7 +193,8 @@ async function videoRoutes(fastify) {
     },
   }, async (request, reply) => {
     const {
-      prompt, images = [], videos = [], audios = [], orderedMedia, imageDescriptions,
+      prompt, content: contentOverride, tools: toolsOverride,
+      images = [], videos = [], audios = [], orderedMedia, imageDescriptions,
       subject_definitions: subjectDefs,
       subtitle, roll_type: rollType,
       model, resolution, ratio, duration,
@@ -184,48 +203,73 @@ async function videoRoutes(fastify) {
       apiKey, apiUrl, region,
     } = request.body
 
+    const hasContentOverride = Array.isArray(contentOverride) && contentOverride.length > 0
+    if (!prompt && !hasContentOverride) {
+      return reply.code(400).send({ success: false, error: 'prompt 或 content 至少需要一项' })
+    }
+
     const regionOverrides = resolveRegionOverrides(region)
-    const effectiveApiKey = apiKey || regionOverrides.apiKey || undefined
-    const effectiveApiUrl = normaliseApiUrl(apiUrl) || regionOverrides.apiUrl || undefined
-    const effectiveModel = (region === 'cn' && (!model || model === 'doubao-seedance-2-0-fast')) ? 'doubao-seedance-2-0' : model
+    // 只用国内站模式下国内站覆盖优先于「接口配置」里手填的 apiKey/apiUrl——开这个开关
+    // 就是要连自定义 key 都一并管住，不留一条能绕开国内站的路。
+    const effectiveApiKey = (CN_ONLY ? regionOverrides.apiKey : (apiKey || regionOverrides.apiKey)) || undefined
+    const effectiveApiUrl = (CN_ONLY ? regionOverrides.apiUrl : (normaliseApiUrl(apiUrl) || regionOverrides.apiUrl)) || undefined
+    let effectiveModel = ((CN_ONLY || region === 'cn') && (!model || model === 'doubao-seedance-2-0-fast')) ? 'doubao-seedance-2-0' : model
+    // 没有 cn 覆盖、也没有显式 apiKey/apiUrl 时会落到直连火山方舟（ARK_API_KEY）——
+    // 这条路不认通用模型名，换成账号下实测可用的带版本号 ID
+    if (!effectiveApiKey && !effectiveApiUrl && ARK_MODEL_REMAP[effectiveModel]) {
+      effectiveModel = ARK_MODEL_REMAP[effectiveModel]
+    }
     const callbackUrl = effectiveApiUrl ? null : autoCallbackUrl()
 
-    if (request.user && request.user.used >= request.user.quota) {
+    // 额度目前不限制（`QUOTA_ENFORCED` 默认关，见 lib/quota.js）——用量仍在下面照常累加
+    if (QUOTA_ENFORCED && request.user && request.user.used >= request.user.quota) {
       return reply.code(403).send({ success: false, error: '额度已用完' })
     }
 
-    // 角色定义原文锁的最后一道闸。分镜生成时已经锁过一次，但这里还要再锁：
-    // 存量分镜（锁上线之前生成的）和手动改过的 prompt 都只经过这一条路 ——
-    // 定义句在这里统一换成原文，同一个角色在每一镜才真的一字不差。
-    let finalPrompt = subjectDefs
-      ? lockSubjectAnchors(prompt, parseSubjectDefs(subjectDefs))
-      : prompt
+    let finalPrompt = prompt
+    if (!hasContentOverride) {
+      // 角色定义原文锁的最后一道闸。分镜生成时已经锁过一次，但这里还要再锁：
+      // 存量分镜（锁上线之前生成的）和手动改过的 prompt 都只经过这一条路 ——
+      // 定义句在这里统一换成原文，同一个角色在每一镜才真的一字不差。
+      finalPrompt = subjectDefs
+        ? lockSubjectAnchors(prompt, parseSubjectDefs(subjectDefs))
+        : prompt
 
-    // 台词块跟字幕对齐。字幕在页面上可以改，而结构化的 dialogue 没有落库 ——
-    // 不同步的话，画面里的人念的是旧词、烧上去的字幕是新词。音色行保留不动。
-    //
-    // 重建时若这一镜原来就没有音色行，按角色定义里的音色绑定补一句：
-    // `角色「小李」绑定@图片1、音色@音频1` → `<主体1> 使用 @音频1 …的音色说话`。
-    // 音色描述取素材说明里那条音频的说明（`音频1：角色「小李」的音色 — 预设音色：青年-男-…`）
-    // —— 官方约定：只给编号不描述音色会飘。
-    const audioDescs = new Map(
-      [...String(imageDescriptions || '').matchAll(/^\s*音频\s*(\d+)\s*[：:]\s*(.*)$/gm)]
-        .map(m => [Number(m[1]), String(m[2] || '').replace(/^.*?—\s*/, '').trim()])
-    )
-    const anchorMap = subjectDefs ? parseSubjectDefs(subjectDefs) : new Map()
-    finalPrompt = syncSpeechWithSubtitle(finalPrompt, subtitle, {
-      rollType,
-      voiceOf: (subjectNo, speaker) => {
-        const def = anchorMap.get(subjectNo)
-        if (!def?.audioRef) return ''
-        const zh = audioDescs.get(def.audioRef) || ''
-        return `${speaker} 使用 @音频${def.audioRef} ${zh}的音色说话`
-      },
-    })
+      // 台词块跟字幕对齐。字幕在页面上可以改，而结构化的 dialogue 没有落库 ——
+      // 不同步的话，画面里的人念的是旧词、烧上去的字幕是新词。音色行保留不动。
+      //
+      // 重建时若这一镜原来就没有音色行，按角色定义里的音色绑定补一句：
+      // `角色「小李」绑定@图片1、音色@音频1` → `<主体1> 使用 @音频1 …的音色说话`。
+      // 音色描述取素材说明里那条音频的说明（`音频1：角色「小李」的音色 — 预设音色：青年-男-…`）
+      // —— 官方约定：只给编号不描述音色会飘。
+      const audioDescs = new Map(
+        [...String(imageDescriptions || '').matchAll(/^\s*音频\s*(\d+)\s*[：:]\s*(.*)$/gm)]
+          .map(m => [Number(m[1]), String(m[2] || '').replace(/^.*?—\s*/, '').trim()])
+      )
+      const anchorMap = subjectDefs ? parseSubjectDefs(subjectDefs) : new Map()
+      finalPrompt = syncSpeechWithSubtitle(finalPrompt, subtitle, {
+        rollType,
+        // 身份对应行：`<主体1>` 指的是 content 里第几个 image_url、嗓子取自第几个
+        // audio_url —— 台词行本身没说，缺了这句模型只能从画面描述里猜
+        identityOf: (subjectNo, speaker) => {
+          const def = anchorMap.get(subjectNo)
+          const bits = [`即 @图片${subjectNo} 中的人物`]
+          if (def?.audioRef) bits.push(`音色取自 @音频${def.audioRef}`)
+          return `说话人身份对应：${speaker}（${bits.join('，')}）。`
+        },
+        voiceOf: (subjectNo, speaker) => {
+          const def = anchorMap.get(subjectNo)
+          if (!def?.audioRef) return ''
+          const zh = audioDescs.get(def.audioRef) || ''
+          return `${speaker} 使用 @音频${def.audioRef} ${zh}的音色说话`
+        },
+      })
+    }
 
     try {
       const result = await createVideoTask({
-        prompt: finalPrompt, images, videos, audios, orderedMedia, imageDescriptions,
+        prompt: finalPrompt, content: hasContentOverride ? contentOverride : undefined,
+        tools: toolsOverride, images, videos, audios, orderedMedia, imageDescriptions,
         model: effectiveModel, resolution, ratio, duration,
         seed, generateAudio, watermark, webSearch,
         cameraFixed, returnLastFrame, draft, serviceTier, priority,
@@ -245,7 +289,7 @@ async function videoRoutes(fastify) {
         success: true,
         // prompt 回传：定义句可能被原文锁改写过，页面拿它回写分镜，
         // 免得列表里显示的还是旧文本、下次提交又要再锁一遍
-        data: { taskId, status, callbackUrl: callbackUrl || null, prompt: finalPrompt },
+        data: { taskId, status, callbackUrl: callbackUrl || null, prompt: hasContentOverride ? null : finalPrompt },
       }
     } catch (err) {
       fastify.log.error(err)
@@ -258,9 +302,14 @@ async function videoRoutes(fastify) {
 
     const cached = store.get(taskId)
     const provider = getProvider(taskId)
-    const effectiveProvider = (provider.apiKey || provider.apiUrl)
-      ? provider
-      : resolveRegionOverrides('cn')
+    // provider 是**内存里的**（video/store.js），后端一重启就全没了 —— 重启前提交的任务
+    // 再来查，provider 就成了空对象。所以没记录时按 resolveRegionOverrides 重算一次：
+    //   · CN_ONLY 开着（当前部署）：所有任务都是国内站建的，这里拿回国内站的 key/url。
+    //     退回「apiFetch 默认链」等于没有 key，直接 500 —— 页面上那一镜就永远停在
+    //     「队列中」，而任务其实早就跑完了。
+    //   · CN_ONLY 关着：仍然返回 {}，和以前一样让 apiFetch 走自己的默认链，
+    //     不会拿国内站的 key 去查一个不是国内站创建的任务（那会永远 404 task not found）
+    const effectiveProvider = (provider.apiKey || provider.apiUrl) ? provider : resolveRegionOverrides()
     if (cached) {
       const cachedData = normaliseTask(cached)
       if (TERMINAL.has(cachedData.status)) {

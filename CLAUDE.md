@@ -5,7 +5,11 @@
 - `frontend/` — Next.js App Router (port 8113)
 - `backend/` — Fastify API server (port 8112)
 - Domain: `https://meeaws.xingke888.com` (本机 AWS 部署, nginx → frontend 8113, API 8112)
-  - `https://sd.xingke888.com`、`https://v.xingke888.com`、`https://demo1.fidelityai.net` 是同一部署的其它域名
+  - `https://v.xingke888.com`、`https://demo1.fidelityai.net` 是同一部署的其它生产域名
+  - **`https://sd.xingke888.com` 是专用 dev 域名，不是生产镜像**——根路径直接转发到 dev 前端
+    8118（`next dev`，热更新），不是 8113；后端仍是共用的生产 8112（dev 没有独立后端）。
+    改完 `frontend/**` 直接刷新这个域名就能看到效果，不用等 `next build`；
+    改 `backend/src/**` 仍要 `pm2 restart seedance20-backend`（见「Dev 与生产并存」）
   - `https://mee.xingke888.com` 指向另一台服务器,不在本机
 
 ## Frontend
@@ -55,17 +59,30 @@
 
 ### Voiceover-v3 Page Flow
 
-1. **视频类型** — 叙事短片 / 解说纪录片（只切 `video_type`，两种共用同一个 textarea，见「两个正交维度」）
-2. **角色** — Select characters from project subjects (default: all project subjects)
-3. **视频概念描述** — 唯一的 textarea（或用 AI生成 via DeepSeek）。标题行右侧是
+只做叙事短片（`video_type` 写死 `story`，不再有类型切换）——
+解说纪录片的入口（视频类型 radio、「配音（可选）」TTS 区）已从这个页面移除，见「两个正交维度」。
+
+1. **角色** — Select characters from project subjects (default: all project subjects)
+2. **视频概念描述** — 唯一的 textarea（或用 AI生成 via DeepSeek）。标题行右侧是
    「专业分镜生成」浮窗 —— 那只是**参数面板**，生成由页面上的按钮触发
-4. **配音（可选）** — 音色选择 + Azure TTS。**只在解说纪录片下出现**（叙事短片的人声来自视频自身）
-5. **参考素材** — Upload images/video/audio
-6. **主体定义** — AI analyze subjects from uploaded media（`/voiceover/analyze-subjects`）
-7. **生成分镜脚本** — 走 `/prompt/storyboard-async`，**后台任务**，可以离开页面（见「分镜生成是后台任务」）
-8. **分镜视频生成** — Submit each shot to Seedance API for video generation
-9. **分镜合并** — Merge videos + burn SRT subtitles；解说纪录片再叠 Azure 音轨，
-   叙事短片保留分镜自带的对白原声（ffmpeg）
+3. **参考素材** — Upload images/video/audio
+4. **主体定义** — AI analyze subjects from uploaded media（`/voiceover/analyze-subjects`）
+5. **生成分镜脚本** — 走 `/prompt/storyboard-async`，**后台任务**，可以离开页面（见「分镜生成是后台任务」）
+6. **分镜视频生成** — Submit each shot to Seedance API for video generation
+   - 每 10 秒轮询一次，分镜卡上显示**已等待多久**；排队/生成超过 **3 分钟**
+     （`STUCK_AFTER_MS`）就在那一行放出「重新生成」——另开一个任务，
+     **旧任务不会被取消**（Seedance 没有取消接口），只是不再轮询它。
+     重开前会先 `clearInterval` 掉上一轮轮询，否则旧任务的状态会盖掉新任务。
+     刷新页面后的「已等待」从 `shots.updated_at` 近似（还在跑的任务，最后一次写库就是提交那次）
+   - **轮询失败要显示出来**：`/video/task/:taskId` 报错时前端把错误挂到该镜的
+     `task.error`（红字），下一次查成功自动清掉。以前只 `console.error`，
+     后端一挂页面上就只剩一个转圈的「队列中」，分不清是真在排队还是查询挂了
+   - ⚠️ **`video/store.js` 的 provider 表在内存里，后端一重启就没了**。
+     `/video/task/:taskId` 查不到 provider 时按 `resolveRegionOverrides()` 重算
+     （`CN_ONLY` 下拿回国内站 key/url；关着仍返回 `{}` 走默认链）——
+     否则重启前提交的任务再查就是 500「没有可用的国内站 apiKey」，
+     那一镜永远停在「队列中」，而任务其实早跑完了
+7. **分镜合并** — Merge videos + burn SRT subtitles，保留分镜自带的对白原声（ffmpeg）
 
 ### Key Features
 
@@ -75,8 +92,29 @@
 - **Smart subtitle splitting**: Only breaks at punctuation, each shot audio < video duration
 - **State persistence**: Video subjects + media items saved to DB (`video_subjects`, `video_media` tables)
 - **Batch tasks**: PostgreSQL persistence for task history
-- **JSON content ordering**: subjects first → asset images → uploaded images → videos → audio
-  —— 这个顺序就是提示词里 `@图片N` / `@视频N` / `@音频N` 的编号，**不能重排**
+- **JSON content ordering**（`frontend/lib/contentMedia.ts` 的 `buildContentMedia()`，
+  **全项目唯一的一份**）：带图角色的头像在前（按 `video_subjects` 顺序）→ 参考素材按入列顺序
+  （图片/视频/音频混排）。content 里有 `text` / `image_url` / `video_url` / `audio_url` 四种块，
+  **`text` 不参与编号**：第 N 个 `image_url` 就是 `@图片N`，`@视频N` / `@音频N` 同理，三类各自从 1 起。
+  这个顺序**不能重排** —— 重排一次角色就锚到别人的图上。
+  - **角色 ↔ 头像**：换头像选的真人/虚拟头像是 `asset-2026…` 这种 Asset ID，
+    `assignAssetAvatar()` 建 `project_subjects` 行时把它存进 `asset_id`（角色卡靠
+    `scriptAnalysis[].linkedSubjectId` 指向这个主体）。content 里写成 `asset://<id>`，
+    没有 Asset ID 的头像才用图片 URL。参考素材里的历史写法 `asset://remote:<id>` 归一成 `asset://<id>`
+  - **编号从排布里查，不按下标猜**：`subjectImageNo(cm, subjectId)` / `mediaNoOf(cm, item)`
+    直接数 content 里同类型素材的位置。以前提交、「查看提交 JSON」、参数面板预览、
+    `buildSubjectContext` 四处各拼各的，参数面板还把 asset 图排到上传图前面 ——
+    编号和实际排布对不上，角色就指到别人的图上了。现在四处都从同一份 `contentMedia` 出
+  - **同一张图既是角色头像又被加进参考素材时只留前面那条**：重复既白占 9 张图的额度，
+    又让后面所有编号错位
+- **素材数量上限**：一次请求 `image_url` 最多 **9** 个、`video_url` / `audio_url` 各 **3** 个
+  （超了接口直接拒）。两道闸：
+  - 前端 `voiceover-v3` 的 `MEDIA_CAPS` + `mediaLimit()` 挡在上传/入列那一步。
+    **图片这 9 个是整条请求的额度**，带图角色的头像提交时排在参考素材之前、同样占名额，
+    所以参考素材能加几张图 = `9 - 带图角色数`（浮窗底部实时显示还剩几个）
+  - 后端 `video/service.js` 拼完 content 后按类型截断（`MEDIA_CAPS`），保留靠前的
+    —— 「重要素材前置」的排法下，截掉的就是最不重要的那几个，并打一条 warn。
+    手改过的 content（`contentOverride`，「查看提交 JSON」）**不截**：看到什么就发什么
 
 ## Backend
 
@@ -154,14 +192,21 @@
 
 ### 提示词引擎
 
-- `backend/src/prompt/prompts.js` — 6 个 system prompt（**只有系统提示词**，拍摄手艺在 `skills/`）。前 5 个**逐字移植**：`SINGLE_SHOT` / `QCZH`(起承转合) / `STORYBOARD` / `ENHANCE` / `NARRATION`(解说纪录片)。后四个规定了严格 JSON 输出结构，前端与分镜导入依赖，勿随意改写。
-  第 6 个 `DIALOGUE` **是新写的，不是移植**：`STORYBOARD`/`QCZH` 只产画面、没有台词字段，
-  而换引擎前的老分镜接口会逐镜生成字幕 —— 所以叙事短片走**两步生成**，第二步补台词。
-  台词是**旁白与对白穿插**（旁白占四分之一到三分之一，管空镜/转场/时间跳跃/开场收尾，
-  对白管当场发生的冲突与态度；一镜之内一般只用一种，两种都要时旁白在前对白在后），
+- `backend/src/prompt/prompts.js` — 6 个 system prompt（**只有系统提示词**，拍摄手艺在 `skills/`）。
+  `SINGLE_SHOT` / `ENHANCE` / `NARRATION`(解说纪录片) 三个**逐字移植**，规定了严格 JSON 输出结构，
+  前端与分镜导入依赖，勿随意改写。
+  `QCZH`(起承转合) / `STORYBOARD` **不是逐字移植**——2026-09 为了叙事短片改成「先写剧本再分镜
+  配运镜」两步式，从只产画面重写成「拿一段完整剧本原文当输入，切镜+配运镜+把台词原文分配进
+  镜头」，详见「叙事短片的两步生成」。两条结构共用同一份对白分配规则
+  （`shotSplitDialogueRules()` 函数，改规则改一处，两条叙事结构都跟着改）。
+  `SCRIPT_SYSTEM` 是第 6 个、**新写的**：只管写故事，不出大纲、不配镜头，一遍写完中文对白剧本
+  （片名/人物/幕启/环境描写/台词/旁白，仿真人剧本格式）。台词是**旁白与对白穿插**
+  （旁白占四分之一到三分之一，管空镜/转场/时间跳跃/开场收尾，对白管当场发生的冲突与态度），
   每句带 `speaker`（用外貌特征指代，不用人名）和 `type`
-  （`dialogue` 角色开口 / `narration` 画外旁白）—— **两种都会写进 `prompt_en`**，
-  对白进 lip-sync 块、旁白进画外音块，字幕两类一起烧。
+  （`dialogue` 角色开口 / `narration` 画外旁白）—— 两种最终都会写进 `prompt_en`
+  （对白进 lip-sync 块、旁白进画外音块，字幕两类一起烧），但这是 `STORYBOARD`/`QCZH`
+  第二步的活，`SCRIPT_SYSTEM` 本身完全不碰镜头。
+  独立的 `DIALOGUE_SYSTEM` 已删除，职责被上面两处吸收。
 - `backend/src/prompt/engine.js` — Anthropic SDK 封装，JSON 用 `jsonrepair` 兜底
 - `backend/src/prompt/skills/` — 拍摄手艺，一个 `.md` 一段（见「拍摄手艺（skills）」章节）
 - `backend/src/prompt/guide.js` — 提示词写作指南（结构化数据，非 HTML）
@@ -187,71 +232,181 @@ SDK 会直接拒掉非流式请求；分镜实测 33-80s（skill 越装越多、
   `finishStoryboard()` —— 结果可能是回到页面时才取到的，那时 `handleInit` 早退出了
 - 轮询请求本身失败（断网）不终止任务，下一次 tick 再试
 
-### 两个正交维度
+### 两个正交维度（voiceover-v3 现在只剩一个）
 
-分镜生成有两个独立开关：
+分镜生成本来有两个独立开关（叙事短片/解说纪录片 + 自由/起承转合），但 voiceover-v3 上的
+**「视频类型」toggle 已经去掉** —— 页面现在只做叙事短片，`video_type` 在提交时写死 `'story'`，
+不再有 radio、不再镜像 `subtitleInput`、也没有「配音（可选）」那个 Azure TTS 区块了。
+字幕交给后端按脚本自动生成（`subtitleInput` 留空即可），人声来自 Seedance 按 prompt 里的对白生成
+（`generateAudio` 默认开）。
 
-voiceover-v3 上「叙事短片 / 解说纪录片」是被提到页面层的生成器参数 —— **它只决定 `video_type`，不切换任何输入框**。页面只有**一个 textarea**，两种视频类型共用同一份文本（存在 `script`）。字幕怎么来，由视频类型决定：
+`narration`（解说纪录片）走的 `NARRATION_SYSTEM`、Azure 逐镜配音对齐等后端能力**还在**
+（`/prompt/storyboard` 接 `video_type=narration` 仍然可用，旧版视频编辑器
+`/projects/[id]/videos/[videoId]` 上的 `StoryboardGenerator` 面板也还留着这个 select），
+只是 voiceover-v3 不再提供入口，也没有回填过的前端状态（老数据里 `params.videoType === 'narration'`
+的视频，重开时字幕/配音字段仍会被当成普通文本加载，但页面不会再启动 TTS 或按解说纪录片规则合并）。
 
-| 视频类型 | `subtitleInput` |
-|---|---|
-| 解说纪录片 | = textarea 的内容（那份文本本身就是解说词/字幕） |
-| 叙事短片 | 空 —— 这份文本只是概念描述，字幕交给后端按脚本自动生成 |
-
-镜像发生在两处：日常输入走 `setConceptText`，**切换视频类型那一刻**由一个 effect 同步一次。该 effect 有两个约束，改动时注意：只能认类型变化（跟着 `script` 跑会把分镜导入写进 `subtitleInput` 的字幕覆盖掉），且首次挂载不能跑（否则会清掉从库里读出来的字幕）。
-
-**字幕管线本身没动** —— `ttsScript`、落库的 `subtitle_input`、时长估算全部照旧读 `subtitleInput`，只是它的来源从自己的输入框换成了共享框。下方「配音（可选）」（音色选择 + TTS）**只在解说纪录片下出现** —— 叙事短片的字幕为空，没有可配音的文本。「专业分镜生成」按钮在「视频概念描述」标题行右侧，点开是**浮窗**（经 `createPortal` 挂到 `body`，避开页面的 sticky 头部和 overflow 容器；遮罩层透明只用来接外部点击，不遮挡也不锁页面滚动；Esc / 点外部关闭）。
+「专业分镜生成」按钮在「视频概念描述」标题行右侧，点开是**浮窗**（经 `createPortal` 挂到 `body`，
+避开页面的 sticky 头部和 overflow 容器；遮罩层透明只用来接外部点击，不遮挡也不锁页面滚动；
+Esc / 点外部关闭），传给它的 `videoType` 是写死的 `"story"`（`controlled` 模式下面板会隐藏自己的
+「视频类型」select）。
 
 | 参数 | 取值 | 说明 |
 |---|---|---|
-| `video_type` | `story`(叙事短片) / `narration`(解说纪录片) | 解说纪录片优先级最高，走 `NARRATION_SYSTEM`，每镜产出可直接配音的 `narration_script` |
-| `narrative_structure` | `free`(自由) / `qczh`(起承转合) | 仅在叙事短片下生效；起承转合至少 4 镜 |
+| `video_type` | 固定 `story` | voiceover-v3 提交时写死；`narration` 仍是后端合法值，只是这个页面不再发送 |
+| `narrative_structure` | `free`(自由) / `qczh`(起承转合) | 起承转合至少 4 镜 |
 
 ### 叙事短片的两步生成
 
-`video_type=story` 时 `/prompt/storyboard` 会连发两次模型调用：
+`video_type=story` 时 `/prompt/storyboard` 会连发两次模型调用——**先写剧本，再分镜配运镜**
+（2026-09 从「先排镜头画面，再往里塞台词」倒过来的，原因见下面「为什么倒过来」）：
 
-1. `STORYBOARD` / `QCZH` 出画面（`prompt_en`、首末帧、构图色调…）；`DIALOGUE_CRAFT` 要求
-   至少 2/3 的镜头有角色在画面里说话，且看得清脸 —— 第一步排不出能开口的人，第二步的对白就没处放
-2. `DIALOGUE` 按第一步的镜头编号+时长+景别+A/B-roll+画面说明**逐镜写对白**（角色定义一并传过去，
-   `speaker` 才描述得出画面里真实存在的人），结果同时写进三处：
-   - `shot.subtitle` = 该镜所有台词拼接（烧字幕用）
-   - `shot.dialogue` = 结构化的 `{speaker, speaker_en, type, text}[]`
-   - `shot.prompt_en` 末尾追加 `Dialogue (spoken on camera, lip-synced):` + 每行 `X says/replies/continues: “台词”`
-     —— **句式必须是英文的 `says:`**（Seedance 靠它识别台词），**引号里的中文原文不能翻译**
-     （口型按引号里的字对齐，翻了就改动了要说出口的字）。`X` 取模型给的 `speaker_en`
-     （英文外貌指代，用词要和该镜 `prompt_en` 里对这个人的描述对得上），漏写才退回中文 `speaker`
-   **`narration`（画外旁白）行也一样进 prompt_en**，另起一个 voiceover 块
-   （`Off-screen voiceover (narrator is NOT visible in frame, no lip sync…)`）——
-   它原来只进字幕，成片就是有字无声。字幕两类都烧，声音也就两类都要有；
-   旁白也算一个说话人，`DIALOGUE_SYSTEM` 要为它出一句音色描述，音色锁照贴。
-   有 `dialogue` 台词的镜头 `roll_type` 一律回改成 `a_roll`（有人在画面里说话，按定义就是 A-roll），
-   所以 roll_type 兜底移到了第二步**之前**
+1. `SCRIPT_SYSTEM` 只管写故事：给一个故事种子（+创作目标/受众/基调/核心信息/总时长/角色名单，
+   角色名单只给名字和外貌，不带 `@图片N` 绑定语法——这一步还没有镜头），一遍写完中文对白剧本
+   （片名/时间地点/人物/幕启/环境描写/台词/旁白，仿真人剧本格式），**完全不提镜头、运镜、机位**。
+   语种统一、多音字生僻字换同音字、数字写成读得出的形式，都在这一步就定下来——这是最终会被
+   念出来的文字，不是给人读的文档
+2. `STORYBOARD` / `QCZH` 拿第一步写好的**完整剧本原文**当输入，工作是「开拍」不是「编故事」：
+   决定在哪切镜、给每镜配摄影机语言（景别/运镜/构图/光线/色调），并把剧本里的台词/旁白
+   **原文一字不改**地分配进它所在的镜头——铁律是不许改写、删减、合并出新句子，也不许
+   一句话拆给两个镜头。镜头数不再是硬性指标，`shot_count` 只作为"参考镜头数"软提示
+   （qczh 结构仍然至少 4 镜，一段一镜的底线没变）。这一步顺带产出：
+   - `shot.roll_type`：有台词的镜头标 `a_roll`，其余（含纯旁白/空镜）标 `b_roll`
+   - `shot.dialogue`：这镜分到的台词/旁白，结构化的 `{speaker, speaker_en, type, text}[]`
+   - 顶层 `voices`：每个开口角色（含旁白，`speaker` 写「旁白」）一句英文音色描述 `voice_en`，
+     挂了参考音频时还带 `audio_ref`/`voice_zh`/`subject_label`——和原来 `DIALOGUE_SYSTEM`
+     的职责一样，只是现在和排镜头合成了一次模型调用，不再是独立的第三步
 
-第二步用 `effort: 'low'`，实测约 5s。**失败不阻断** —— 宁可交付没台词的分镜，也不要整个请求失败。
-解说纪录片自带 `narration_script`，跳过第二步。
+   后端收到这一步的结果后做后处理（`routes/prompt.js`，逻辑和以前完全一样，只是数据来源从
+   「第二次模型调用的结果」换成了「这一步 JSON 里自带的 `voices`/`dialogue`」）：
+   - `shot.subtitle` = 该镜 `dialogue` 拼接（烧字幕用）
+   - `shot.prompt_en` 末尾追加 `Dialogue (spoken on camera, lip-synced):` + 每行
+     `X says/replies/continues: “台词”` —— **句式必须是英文的 `says:`**（Seedance 靠它识别台词），
+     **引号里的中文原文不能翻译**（口型按引号里的字对齐，翻了就改动了要说出口的字）。
+     `X` 取模型给的 `speaker_en`（英文外貌指代，要和该镜 `prompt_en` 里对这个人的描述对得上），
+     漏写才退回中文 `speaker`
+   - `narration`（画外旁白）行同样进 `prompt_en`，另起一个 voiceover 块
+     （`Off-screen voiceover (narrator is NOT visible in frame, no lip sync…)`）——
+     它原来只进字幕，成片就是有字无声。字幕两类都烧，声音也就两类都要有
+   - speaker_en 全片归一（同一个人的英文指代不能一镜一个写法，否则 Seedance 当成两个人）
+   - 有 `dialogue` 的镜头 `roll_type` 回改成 `a_roll`（有人在画面里说话，按定义就是 A-roll）
+   - **台词块开头有一行「说话人身份对应」**，把每个说话人钉到 content 里的素材编号上：
+     `说话人身份对应：<主体1>（即 @图片1 中的人物，音色取自 @音频1）；<主体2>（即 @图片2 中的人物）。`
+     旁白写成 `narrator（画外音，不出现在画面中，音色取自 @音频3）`。
+     台词行本身只有 `<主体1> (the man in …) says: “…”` —— 这个标签指的是第几个 `image_url`、
+     嗓子取自第几个 `audio_url`，全靠模型从 prompt 前半段的定义句去推，推错就是
+     别人的脸配别人的嗓子。编号来源：`speakerToSubjectNum`（speaker → 图片编号，
+     经 `voices[].subject_label` 转一道）和 `voices[].audio_ref`；
+     `<主体N>` 的 N 已归一到图片编号（见 `lockSubjectAnchors`）
+
+**镜头数不是一句台词一句切**：这条规则在提示词里是概率性的，不保证每次都听话，
+`mergeSameSetupShots()`（`routes/prompt.js`，紧跟在 JSON 解析之后、在锚定锁/roll_type
+兜底之前跑）做确定性兜底，已经迭代了两版失败方案才落到现在这版：
+- v1「`shot_type`/`camera_move`/`composition` 必须逐字相同才合并」——模型每镜措辞
+  顺手就写得不一样，这个条件基本抓不住真实分布，形同虚设
+- v2「相邻两镜说话人有没有重叠」——一来一回的对话（A、B、A、B…）里相邻两镜说话人
+  从来不是同一个人，这个检测对最常见的场景反而失效，实测两镜真台词一个都合并不了
+- **v3（当前）**：不再从模型写的措辞或说话人模式去猜，而是让模型直接说——
+  `STORYBOARD_SYSTEM`/`QCZH_SYSTEM` 现在要求每镜输出 `camera_setup_id`（正整数），
+  同一次机位延续用同一个数字，**只有真的换机位/换场景才加一** ——
+  一段对话写满 15 秒不得不另起一镜接着说时也继续用同一个数字（那是同一个画面在继续，
+  合不合并交给后端按 15 秒硬顶决定）。
+  后端按这个字段合并：`camera_setup_id` 相同（缺了就不拿它当阻拦条件——两版失败教训
+  是「宁可漏合并」在真实分布下几乎不生效，缺信息时现在默认偏向合并）、`roll_type` 一致
+  （不把对白镜头并进纯空镜）、qczh 还要求 `phase` 一致（不跨起承转合合并）、合并后时长
+  不超 **15 秒硬顶**（Seedance 真实上限），就合并——取前一镜的技术参数、拼接两镜的
+  `dialogue`。只对 `story` 生效——narration 是一步到位、没有这套逐镜 `dialogue` 数组，
+  套用同一条合并逻辑没有意义。
+
+**对话没说完，场景就不许变**（`lockSceneContinuity()`，`routes/prompt.js`，紧跟在
+`mergeSameSetupShots()` 之后跑）：合并之后**还挨在一起的同 `camera_setup_id` 镜头**，
+就是「一段对话写满 15 秒被拆开」的那种。每个分镜是一次独立生成，场景措辞差一个词，
+背景/光线/服装就跟着变 —— 成片里是两个人说着说着换了个房间。所以后端把后一镜的
+`prompt_en` 换成**这一串里第一镜的原文**，只保留它自己写的「时间轴节拍」那一段
+（`0-4s: … 4-9s: …`，神态和微动作按台词走，这正是逐镜该变的东西）；
+`shot_type`/`camera_move`/`composition`/`lighting`/`color_tone` 五个字段也对齐到第一镜。
+- **节拍段靠时间码认**：两边有一边没写成 `0-4s:` 这种带时间码的形式就只对齐技术字段、
+  不动 `prompt_en` —— 宁可放过一镜，也不要把不是节拍的句子换掉。
+  提示词（`shotSplitDialogueRules()` 第 5 条）因此明写了节拍必须带时间码
+- 台词不在这一步：后面 `appendSpeech` 会按每镜自己的 `dialogue` 重新贴
+- 实测模型照着第 5 条写时，两镜本来就只有节拍不同，这个锁是空转的 —— 它是兜底，不是主力
+
+**为什么倒过来**：台词是故事的一部分，先有故事、角色该在哪句话上说什么，才谈得上怎么分镜去拍——
+反过来先排镜头再往里面塞台词，台词只能迁就已经定好的镜头数和时长，容易被切得七零八落。
+这条改法参考自 `/home/ubuntu/seedancdscript-makeer`（另一个项目）「写短剧」线先把故事写完的
+思路，但那个仓库现在并没有接「配镜头」这一步（他们特意把它简化掉了）——这里的第二步
+是本项目自己在它的思路上接上的，不是照搬对方代码。
+
+`DIALOGUE_SYSTEM` 作为独立提示词已经删除，它的规则被拆进了两处：语种/发音相关的规则去了
+`SCRIPT_SYSTEM`，切镜与音色分配的规则去了 `STORYBOARD_SYSTEM`/`QCZH_SYSTEM`
+共用的 `shotSplitDialogueRules()`（`backend/src/prompt/prompts.js`，两条叙事结构共用一份，
+改规则只改一处）。**失败不阻断** —— 分配台词的后处理宁可交付没台词的分镜，也不要整个请求失败。
+解说纪录片（`video_type=narration`）**不受这次改动影响**，仍是一步到位、自带 `narration_script`，
+见「两个正交维度」——这次只改了叙事短片这一条链路。
+
+两次模型调用会让一次叙事短片分镜生成的耗时接近翻倍（原来 33-80s 的单步调用之上，
+多了一次几千字的剧本生成），暂无缓解手段，`/prompt/storyboard-async` 的后台任务机制
+本来就是为这种耗时设计的。
+
+**「剧本分析」按钮现在也写这份剧本**：写剧本的逻辑抽成了独立模块
+`backend/src/prompt/script.js`（`writeScript()` + `scriptRoster()`），`/prompt/storyboard`
+和 `/voiceover/analyze-script`（剧本分析按钮的后端）两处共用——不能一个地方一个拼法，
+不然两边写出来的剧本是两种腔调。
+
+- `/voiceover/analyze-script` 原来只做一件事：拿页面上的概念描述丢给 DeepSeek 提取角色。
+  现在先调 `writeScript()` 写一遍完整剧本（走 Claude，和 storyboard 第一步同一个函数），
+  **再从写好的剧本里提取角色**，不是直接分析概念描述——剧本里的人物有名有姓、说着具体的
+  台词，比一段概念描述提取得准。这一步因此明显变慢（多了一次 Claude 调用），
+  是「一次点两个按钮」和「一次做两件事」之间的取舍，选了后者
+- 响应多了 `data.script`，页面存进新状态 `dialogueScript`，「对白剧本」标题下用
+  `<textarea>` 展示——**可编辑**，改完点「生成分镜脚本」会带着改过的原文去开拍
+  （和 `subjectDefs` 那个可编辑框同一个思路）
+- 落库进 `videos.params.dialogueScript`（和 `scriptAnalysis` 同一个 JSONB，没有单独开表/加列），
+  页面加载时从 `data.params.dialogueScript` 读回来
+- 点「生成分镜脚本」时如果 `dialogueScript` 非空，会当 `script` 字段带给
+  `/prompt/storyboard-async`——后端认到这个字段就跳过 `writeScript()` 直接进第二步，
+  不会把「剧本分析」刚写好的剧本重写一遍。没有 `dialogueScript`（用户没点过剧本分析、
+  直接点了生成分镜脚本）时后端自己写，写完的结果也会同步回页面的 `dialogueScript`
+  并存进 `params`——不管走哪条路径，剧本最终都在页面上看得见、存得住
+- `frontend/lib/api.ts` 新增 `ApiError`（挂 `.data`，不改 `.message`）：角色提取（DeepSeek，
+  便宜）挂了不该连累已经写好的剧本（Claude，贵）跟着白写一遍，`/analyze-script` 出错时
+  响应体仍带 `script` 字段，页面从 `err.data.script` 捞回来
+
+**「剧本分析」按钮点下去要等 Claude 写完剧本（十几秒到几十秒），实际走的是流式版**
+`/voiceover/analyze-script-async` + `/voiceover/analyze-script-status/:jobId`（`/analyze-script`
+同步版还在，接口完整性留着，前端已经不用它了）：`writeScript()` 的 `onText` 回调每收到一段
+新文本就把累计全文写回内存里的任务状态（`scriptJobs`，和 `/prompt/storyboard-async` 的
+`sbJobs` 同一套路，各管各的，没合并成一个通用任务模块），页面每 1s 轮询一次直接把拿到的
+文本怼进 `dialogueScript`——复用的是显示/编辑剧本的同一个状态、同一个 `<textarea>`，
+不是另开一个「预览」框，所以生成过程中这个框是**只读**的（轮询覆盖和手动编辑会打架）。
+**不做 storyboard 那套 localStorage 断线重连**：这个操作比整条分镜生成短得多，用户就在
+当前页面等着，断了大不了重新点一次；取到 `done`/`failed` 结果就把任务从 `scriptJobs`
+删掉（storyboard 那边是要等 TTL 过期，这里操作短，没必要留着占内存）。
+剧本写完后顺带跑的角色提取（DeepSeek）不流式——那一步本来就快，没必要为它加轮询。
 
 **字幕就是台词的准绳**（`prompt/speech.js` 的 `syncSpeechWithSubtitle`）：结构化的 `dialogue`
 没有落库（`shots` 只有 `subtitle` 一列），页面上改一次字幕，prompt 末尾那段台词就对不上了 ——
 画面里的人念旧词、烧上去的字幕是新词。所以**提交生成任务时按字幕重建台词块**：
 - 比对只看可读内容（标点空白不算），一致就原样返回
-- 音色行（`X 使用 @音频N …` / `Voice of X: …`）保留不动 —— 那是音色锁
+- **块开头的非台词行原样保留**：身份对应行（`说话人身份对应：<主体1>（即 @图片1 中的人物，
+  音色取自 @音频1）。`）和音色行（`X 使用 @音频N …` / `Voice of X: …`）都不跟着字幕改。
+  判定规则是「不是台词行的就留着」，不再靠正则去认某一种写法 —— 加一种新的头部行不用改代码
 - **对白还是画外旁白，看画面里有没有人**（prompt 里有没有 `<主体N>`），不看 `roll_type`：
   存量分镜有一批当初被判成旁白、可字幕明明是第一人称台词，人就站在画面里 —— 那就该让他开口
 - 原来没有台词块的（旁白从前不进 prompt，成片有字无声）在这一步补上；
-  **重建时若原来没有音色行，按角色定义里的音色绑定补一句**
-  （`角色「X」绑定@图片1、音色@音频1` → `<主体1> 使用 @音频1 …的音色说话`，
-  音色描述取素材说明里那条音频的说明）—— 缺这一句，同一个角色逐镜还是不同嗓子
+  **重建时若原来没有头部行，按角色定义里的绑定补上身份对应行和音色行**
+  （`角色「X」绑定@图片1、音色@音频1` → `说话人身份对应：<主体1>（即 @图片1 中的人物，
+  音色取自 @音频1）。` + `<主体1> 使用 @音频1 …的音色说话`，音色描述取素材说明里那条音频的说明）
+  —— 缺这两句，模型既不知道标签指的是哪张图，同一个角色逐镜还是不同嗓子。
+  两条 hook 在 `routes/video.js` 提交时传进去：`identityOf(subjectNo, speaker)` / `voiceOf(…)`
 
 **叙事短片的人声来自视频自身**，不是 Azure TTS：
-- `generateAudio` 跟着视频类型走（切换类型的那个 effect 里同步，与 `subtitleInput` 同一处）：
-  **叙事短片 = true**（对白已写进 prompt，关掉就只剩哑画面）、**解说纪录片 = false**
-  （成品音轨来自 Azure 旁白，视频自带音频用不上）。已保存的视频仍以库里 `params.generateAudio` 为准
-- **`videoType` 必须一起落进 `params`**：切换类型的 effect 刻意跳过首次挂载，所以打开一条
-  已存的视频时它不会跑。类型不存的话每次重开都回到叙事短片，而 `generateAudio` 却从库里
-  读了出来 —— 于是出现「叙事短片 + `generate_audio: false`」的哑画面。
-  没存过 `videoType` 的老数据：类型按 `subtitle_input` 空不空反推，`generateAudio` 以类型为准
-  （那个 false 是当年默认值的残留）；存过的行说明是新数据，尊重用户手动开关
+- **「参数设置」里的「音频」默认开，读库时也只认 `true`**：页面只做叙事短片，人声就是
+  Seedance 按 prompt 里的对白生成的，关掉等于交付哑画面。所以 `params.generateAudio`
+  **为 false 时不采信**（当作解说纪录片时代的残留丢掉，回到默认开）——
+  本轮里仍可手动关掉（提交就按关的发），只是不跨刷新保留。
+  历史上「叙事短片 + `generate_audio: false`」的哑画面就出在这里：视频类型 toggle 移除后
+  库里那个 false 再没有东西去纠正它，每次重开都默认关。存量行下次自动保存时会写回 true
 - 生成分镜后**不调 `/voiceover/tts`**（只有解说纪录片调），分镜时长直接取模型给的
 - 合并时**不传 `audioUrl`** —— `/voiceover/merge` 的 `audioUrl` 已改为可选：不传就保留各分镜
   视频自带的音轨（concat 前给缺音轨的分镜补等长静音，否则 concat demuxer 会因流布局不一致失败），
@@ -321,7 +476,7 @@ front matter 用 `when_*` 声明生效条件，**加一条手艺 = 丢一个 `.m
 （`pickPresetVoice`，按角色卡文字猜性别和年龄段 → 音色库的 `青年/少年_少女/中年/儿童/老年`
 分组 + 性别；挑没被占用的，同性别同龄的角色用 index 错开不撞车）。挑好的音频当场入列参考素材，
 `voice_bindings` 用**刚算好的那份**拼（state 还没落地，所以 `subjectContext` 抽成了纯函数
-`buildSubjectContext`，能拿新值直接构建）。音频配额（`MEDIA_LIMITS.audio`）用完就不再配，
+`buildSubjectContext`，能拿新值直接构建）。音频配额（`mediaLimit('audio')`，见「素材数量上限」）用完就不再配，
 剩下的角色退回模型写的英文音色描述。
 
 **页面上绑音色**：剧本分析的角色卡上有「选音色」，从已上传的参考音频里挑一条
@@ -334,14 +489,31 @@ front matter 用 `when_*` 声明生效条件，**加一条手艺 = 丢一个 `.m
 **预设音色库**：方舟体验中心的素材清单扒在仓库根的 `materials/`（`all_materials.json` +
 `audio_presets.json`，另有 74 个 mp3 的本地副本）。后端 `GET /library/materials[?kind=audios|images|videos]`
 （`src/lib/materials.js`，启动后缓存一次）归一成 `{name, category, url, thumb}`：
-音色 80 条（青年/少年_少女/中年/儿童/老年，带 base64 头像和时长）、
+音色 74 条（青年/少年_少女/中年/儿童/老年，带 base64 头像和时长）、
 图片 71 张（服饰/环境/画风/角色）、视频 35 段（动作/运镜）。
 ⚠️ JSON 里的 `videoUrl` / `imageUrl` **是坏的**（少了 `动作/`「服饰/」这层子目录、扩展名也不对），
 能用的地址是 `thumbnail` 去掉 `?x-tos-process=…`；音频的 `audioUrl` 是对的。
-文件托管在火山的公开 TOS 上，直接把地址交给 Seedance，不必转存到 `/uploads`。
+
+**地址里不留百分号转义**：清单里的路径是 `%E5%9B%BE%E7%89%87` 这种 UTF-8 转义（文件名本身是
+正常中文，不是乱码）。`prettyPath()` 逐段解回中文再交出去 —— 只动 path，query 原样保留
+（签名串里的 `%2F` 有语义）；解开后 trim 一次（清单里唯一带空格的 `%20华尔兹.mp4`，
+去掉空格取到的是同一个对象，ETag 一致），trim 完仍含空格/`#`/`?`/`%`/`/`/`\` 的段退回转义写法。
+前端 `voiceover-v3/page.tsx` 的 `prettyUrl()` 是同一条规则（粘贴链接添加素材时用），
+存量素材存的是转义版，所以缩略图查表、「已加入」标记、去重比对前都先过一遍它。
+
+**视频/音频已转存到本机**（图片没有，仍走 TOS）：`node backend/scripts/download-materials.js`
+把它们下到 `backend/uploads/materials/<视频|音频>/<分类>/<中文文件名>`，
+`load()` 发现本地有副本就交 `${WEBHOOK_BASE_URL}/uploads/materials/…`，不再把 volces 外链甩给
+Seedance。脚本可重复跑（只下缺的，`--force` 全重下），**失败的逐条打印并以非 0 退出**。
+`uploads/` 在 .gitignore 里，167MB 不进仓库。
+转存后视频/音频只交本机有副本的条目 —— 清单里有 6 条音色在 TOS 上已经 404（方舟自己的清单过期，
+本地也没副本），所以音色从 80 条变成 **74 条**；没跑过转存脚本时行为不变（全给外链）。
+缩略图仍用 TOS 的 `?x-tos-process=…`（本机没有现取首帧的能力）。
+`lib/uploads.js` 的 `localUploadPath()` 因此放宽到能吃带子目录的路径（带 `../` 穿越检查）。
 两个入口都能用：角色卡的「选音色」（搜索 + 试听，选中后**先入列参考素材**才有 `@音频N` 编号，
 多个角色共用同一条只入列一次），以及「参考素材」标题行的**「素材库」浮窗**
-（视频/音频/图片三个页签 + 搜索，点一下即入列，受 `MEDIA_LIMITS` 上限约束）。
+（视频/音频/图片三个页签 + 搜索，点一下即入列，受素材数量上限约束；
+浮窗顶部另有**「粘贴链接」**一栏，任意 http(s) 直链按当前页签入列，文件名按 URL 末段解出中文）。
 缩略图不落库（音色头像是 base64，太大）—— 列表渲染时按 url 现查 `presetThumbByUrl`，
 视频没有现成缩略图时用 `?x-tos-process=video/snapshot,t_0,h_600` 现取首帧。
 
@@ -392,6 +564,9 @@ front matter 用 `when_*` 声明生效条件，**加一条手艺 = 丢一个 `.m
 
 ### Azure 语音与分镜对齐（解说纪录片）
 
+后端能力仍在，但 **voiceover-v3 已经没有入口**触发这一节（视频类型 toggle 和「配音（可选）」
+区块都移除了，见「两个正交维度」）——`/voiceover/tts` 路由本身没动，仍可直接调用。
+
 Seedance 只接受 **4-15 的整数秒**，而中文每个字的实际时长差很多（数字、标点停顿、专有名词）。
 所以不能整条念完再按字数比例切分镜 —— 那样能差一两秒，画面切了话没说完。
 
@@ -436,6 +611,18 @@ TTS 转成 Azure 的 `<mstts:express-as style=… styledegree=1.0~1.2>`。
 ### 角色锚定
 
 `/prompt/storyboard` 接受 `subject_definitions` 和 `image_descriptions`，拼进 **user message**（系统提示词逐字移植，不动），要求模型在 `prompt_en` 里用 `@图片N` 引用角色。返回前后端从 `prompt_en` 正则提取出 **`image_refs: number[]`** 挂到每个 shot 上 —— 从文本反解而不是让模型多输出一个字段，因为系统提示词规定了严格 JSON 结构，模型漏写新字段的概率远高于漏写它刚写进 prompt 的引用。
+
+**外貌要写详细，而且单独成段**：这段文字是模型逐镜唯一的长相依据，短了就等于让它每镜自己编。
+- `extractCharacters`（`routes/voiceover.js`）要 **80-140 字**，按固定顺序写全：
+  年龄段与性别 → 身高体型 → 发型发色 → 五官脸型与肤色 → 上衣/下装/鞋（款式+颜色+材质）
+  → 随身配饰 → **体现性格的稳定外在气质**
+- **性格只取「长在身上」的那一面**：写体态、眼神的习惯性状态、衣着风格传达的气质
+  （挺拔干练、书卷气、松垮随性），不写「谨慎多疑」这类抽象性格词 —— 画面渲染不出抽象性格，
+  写进去会被当成表情去演，和「神态跟着台词变」打架。`personality` 字段仍单独存在，
+  只用于角色卡展示，不进定义句（`buildSubjectContext` 的 `visualOf` 只取 `appearance`）
+- **prompt_en 里主体定义单独成一段**，写在开场声明之后、场景描写之前，这一镜出场的每个主体
+  各占一句（`character-anchoring` 第 1 条 + `seedance-2-0-prompting` 的 ② 段）——
+  不要把主体特征拆散混进场景描写。原文越详细这段越长，**不许为了简洁压缩**
 
 **外貌只留静态特征**：`/voiceover/analyze-script` 的提示词明写了不许带道具、动作、表情、
 场景（`✗ …面带职业微笑，手边放着计算器和文件`），后端再用 `keepStaticLooks()` 按标点切句兜一道 ——
@@ -556,6 +743,9 @@ cd frontend && NEXT_DIST_DIR=.next-dev pm2 start npm --name seedance20-frontend-
 ```
 
 - dev 前端：8118（PM2 `seedance20-frontend-dev`），构建产物在 `.next-dev/`
+- **`https://sd.xingke888.com` 是它的公网入口**——`nginx-sd.xingke888.com.conf` 的
+  `location /` 直接转发到 8118（根路径，不带子路径前缀）；改完前端刷新这个域名就能看效果。
+  其余三个域名（meeaws / v / demo1）的 `location /` 转发到生产 8113，不受影响
 - **后端共用生产的 8112**（`next.config.ts` 的 rewrite，可用 `BACKEND_PORT` 覆盖）——
   也就是 dev 上的操作直接写生产库 `mee2`
 - 后端没有 dev 模式，改 `backend/src/**` 仍要 `pm2 restart seedance20-backend`
@@ -573,6 +763,12 @@ cd frontend && NEXT_DIST_DIR=.next-dev pm2 start npm --name seedance20-frontend-
 
 订阅到账是 **`quota += credits`（累加）**，不是「每月重置」—— `used` 是累计值且从不清零，
 剩余次数 = `quota - used`。改成重置就得连 `used` 一起重置，会把历史用量抹掉。
+
+**目前不限制**：`backend/src/lib/quota.js` 的 `QUOTA_ENFORCED`（env，默认 **关**）是总开关，
+关着时 `/video/generate` 不再因 `used >= quota` 返回 403，`/auth/me` 和 `/billing/subscription`
+多回一个 `quota_enforced: false`，TopNav 显示「次数不限（已用 N 次）」、`/billing` 的
+剩余次数显示「不限制」。**`used` 仍照常累加、充值仍照常写 `quota`** —— 这只关掉「拦」这一步，
+`QUOTA_ENFORCED=true` 一开就立刻按历史用量生效，不用补数据。
 
 ### 套餐
 
@@ -663,18 +859,18 @@ PM2 manages the production processes for seedance2.0 independently.
 
 ### Nginx
 
-四个域名指向同一套服务 (frontend 8113 / backend 8112),配置文件都在仓库根目录并从 sites-enabled 软链:
+四个域名共用同一个后端 8112,配置文件都在仓库根目录并从 sites-enabled 软链:
 
-| 域名 | 配置文件 |
-|---|---|
-| meeaws.xingke888.com | `nginx-meeaws.xingke888.com.conf` |
-| sd.xingke888.com | `nginx-sd.xingke888.com.conf` |
-| v.xingke888.com | `nginx-v.xingke888.com.conf` |
-| demo1.fidelityai.net | `nginx-demo1.fidelityai.net.conf` |
+| 域名 | 配置文件 | `location /` 转发到 |
+|---|---|---|
+| meeaws.xingke888.com | `nginx-meeaws.xingke888.com.conf` | 生产前端 8113 |
+| sd.xingke888.com | `nginx-sd.xingke888.com.conf` | **dev 前端 8118**（专用 dev 域名，见「Dev 与生产并存」） |
+| v.xingke888.com | `nginx-v.xingke888.com.conf` | 生产前端 8113 |
+| demo1.fidelityai.net | `nginx-demo1.fidelityai.net.conf` | 生产前端 8113 |
 
-- `location /api/` → `http://127.0.0.1:8112/`
+- `location /api/` → `http://127.0.0.1:8112/`（四个域名一致，dev/生产共用同一个后端）
 - `location /uploads/` → `http://127.0.0.1:8112/uploads/`
-- `location /` → `http://127.0.0.1:8113`
+- `location /` → 生产三个域名转发到 `http://127.0.0.1:8113`；sd 转发到 `http://127.0.0.1:8118`
 
 Cloudflare 代理在前,SSL 为 Full(非严格)模式,源站的三个 xingke888 域名共用 `/etc/letsencrypt/live/sd.xingke888.com/` 证书。
 `demo1.fidelityai.net` 例外 —— DNS 直连源站没走 Cloudflare,有自己的 Let's Encrypt 证书

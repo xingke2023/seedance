@@ -191,7 +191,11 @@ export default function TasksPage() {
               <div><b>Tokens:</b> {detail.usage?.total_tokens?.toLocaleString() || '-'}</div>
               <div><b>创建:</b> {formatTime(detail.created_at)}</div>
               <div><b>更新:</b> {formatTime(detail.updated_at)}</div>
-              {detail.error && <div><b>错误:</b> <span style={{ color: '#dc2626' }}>{detail.error}</span></div>}
+              {detail.error && (
+                <div><b>错误:</b> <span style={{ color: '#dc2626' }}>
+                  {typeof detail.error === 'string' ? detail.error : JSON.stringify(detail.error)}
+                </span></div>
+              )}
               {detail.content?.video_url && (
                 <div style={{ marginTop: 12 }}>
                   <b>视频:</b>

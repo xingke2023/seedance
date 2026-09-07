@@ -29,6 +29,7 @@ export interface Storyboard {
   title?: string;
   total_duration?: string;
   narrative_summary?: string;
+  script?: string;   // 叙事短片第一步写的完整对白剧本原文（story 才有，narration 没有）
   shots: GeneratedShot[];
 }
 
@@ -212,9 +213,9 @@ export default function StoryboardGenerator({
   const dialog = (
     <div className={styles.backdrop}
       onMouseDown={e => { if (e.target === e.currentTarget) setOpen(false); }}>
-      <div className={styles.dialog} role="dialog" aria-label="专业分镜生成">
+      <div className={styles.dialog} role="dialog" aria-label="分镜设置">
         <div className={styles.dialogHead}>
-          <span className={styles.dialogTitle}>🎬 专业分镜生成</span>
+          <span className={styles.dialogTitle}>🎬 分镜设置</span>
           <button type="button" className={styles.close} onClick={() => setOpen(false)} aria-label="关闭">×</button>
         </div>
 
@@ -279,7 +280,7 @@ export default function StoryboardGenerator({
     <div className={styles.wrap}>
       {!hideTrigger && (
         <button type="button" className={styles.trigger} onClick={() => setOpen(!open)}>
-          🎬 专业分镜生成
+          🎬 分镜设置
         </button>
       )}
       {/* Portalled so page-level sticky headers / overflow containers can't clip it. */}

@@ -6,6 +6,7 @@ const {
   listPlans, planByKey, planByPriceId,
   listPacks, packByKey, ONE_TIME_METHODS,
 } = require('../lib/stripe')
+const { QUOTA_ENFORCED } = require('../lib/quota')
 
 function appBase() {
   return (process.env.APP_BASE_URL || process.env.WEBHOOK_BASE_URL || '').replace(/\/$/, '')
@@ -195,6 +196,7 @@ async function billingRoutes(fastify) {
       data: {
         quota: user.quota,
         used: user.used,
+        quota_enforced: QUOTA_ENFORCED,
         subscription: sub && {
           plan_key: sub.plan_key,
           plan_name: plan?.name || sub.plan_key,

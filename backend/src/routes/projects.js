@@ -2,6 +2,11 @@
 
 const { query } = require('../db')
 
+// `/projects/default` 按这个名字查/建每个用户的默认项目（见下面那条路由）——
+// 删掉它并不会真的少一个项目，下次进 voiceover-v3 又会自动建一个空的回来，
+// 反倒把里面的视频全带走了。所以它不给删。
+const DEFAULT_PROJECT_NAME = '默认视频项目'
+
 async function projectRoutes(fastify) {
   fastify.addHook('onRequest', async (request, reply) => {
     if (!request.user) return reply.code(401).send({ success: false, error: '未登录' })
@@ -11,12 +16,12 @@ async function projectRoutes(fastify) {
     try {
       let result = await query(
         `SELECT id FROM projects WHERE user_id=$1 AND name=$2 LIMIT 1`,
-        [request.user.id, '默认视频项目']
+        [request.user.id, DEFAULT_PROJECT_NAME]
       )
       if (result.rows.length === 0) {
         result = await query(
           `INSERT INTO projects (user_id, name, description) VALUES ($1, $2, $3) RETURNING id`,
-          [request.user.id, '默认视频项目', '系统自动创建的默认项目']
+          [request.user.id, DEFAULT_PROJECT_NAME, '系统自动创建的默认项目']
         )
       }
       return { success: true, data: { id: result.rows[0].id } }
@@ -85,6 +90,14 @@ async function projectRoutes(fastify) {
   fastify.delete('/:id', async (request, reply) => {
     const { id } = request.params
     try {
+      const own = await query(
+        `SELECT name FROM projects WHERE id = $1 AND user_id = $2`,
+        [id, request.user.id]
+      )
+      if (own.rows.length === 0) return reply.code(404).send({ success: false, error: '项目不存在' })
+      if (own.rows[0].name === DEFAULT_PROJECT_NAME) {
+        return reply.code(400).send({ success: false, error: '默认视频项目不能删除' })
+      }
       const result = await query(
         `DELETE FROM projects WHERE id = $1 AND user_id = $2 RETURNING id`,
         [id, request.user.id]

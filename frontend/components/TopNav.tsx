@@ -7,7 +7,7 @@ import { getUserFromToken, clearTokens, getAccessToken } from '@/lib/auth';
 
 const NAV_ITEMS = [
   { href: '/projects',  label: '首页' },
-  { href: '/insurance', label: '港险资料' },
+  { href: '/insurance', label: '剧本库' },
 ];
 
 const ASSET_ITEMS = [
@@ -23,7 +23,7 @@ const MENU_ITEMS = [
 export default function TopNav() {
   const pathname = usePathname();
   const router = useRouter();
-  const [user, setUser] = useState<{ name?: string; username?: string; avatar?: string; quota?: number; used?: number } | null>(null);
+  const [user, setUser] = useState<{ name?: string; username?: string; avatar?: string; quota?: number; used?: number; quota_enforced?: boolean } | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [assetOpen, setAssetOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -75,11 +75,10 @@ export default function TopNav() {
       position: 'sticky',
       top: 0,
       zIndex: 100,
-      background: '#1e293b',
-      borderBottom: '1px solid #334155',
+      background: 'linear-gradient(135deg, #1d4ed8 0%, #2563eb 52%, #3b82f6 100%)',
+      boxShadow: '0 2px 10px rgba(29,78,216,.30)',
       display: 'flex',
       alignItems: 'center',
-      height: 44,
       overflow: 'visible',
     }}>
       <Link href="/" className="brandLogo" style={{
@@ -90,12 +89,12 @@ export default function TopNav() {
         flexShrink: 0,
       }}>
         <span className="brandIcon" style={{
-          background: 'linear-gradient(135deg, #3b82f6, #4f46e5)',
+          background: 'rgba(255,255,255,.20)',
+          border: '1px solid rgba(255,255,255,.30)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
           flexShrink: 0,
-          boxShadow: '0 1px 2px rgba(0,0,0,.25)',
         }}>
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
                fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
@@ -104,13 +103,13 @@ export default function TopNav() {
           </svg>
         </span>
         <span style={{ display: 'flex', flexDirection: 'column', lineHeight: 1 }}>
-          <span className="brandName" style={{ fontWeight: 900, letterSpacing: -0.2, color: '#fff' }}>
-            MACRODATA
+          <span className="brandName" style={{ fontWeight: 900, letterSpacing: 0, color: '#fff' }}>
+            星科AI
           </span>
           <span className="brandSub" style={{
-            fontSize: 8,
+            fontSize: 9.5,
             fontWeight: 700,
-            color: '#94a3b8',
+            color: 'rgba(255,255,255,.70)',
             letterSpacing: 1,
             textTransform: 'uppercase',
             marginTop: 2,
@@ -130,32 +129,19 @@ export default function TopNav() {
       {NAV_ITEMS.map(item => {
         const active = pathname === item.href || pathname?.startsWith(item.href + '/');
         return (
-          <Link key={item.href} href={item.href} className="navLink" style={{
-            color: active ? '#fff' : '#94a3b8',
-            textDecoration: 'none',
-            borderRadius: 4,
-            background: active ? '#334155' : 'transparent',
-            fontWeight: active ? 500 : 400,
-            transition: 'all .15s',
-            whiteSpace: 'nowrap',
-            flexShrink: 0,
-          }}>
+          <Link key={item.href} href={item.href}
+            className={'navLink' + (active ? ' navLinkActive' : '')}
+            style={{ textDecoration: 'none', whiteSpace: 'nowrap', flexShrink: 0 }}>
             {item.label}
           </Link>
         );
       })}
       <div ref={assetRef} style={{ position: 'relative' }}>
-        <button onClick={() => setAssetOpen(v => !v)} className="navLink" style={{
-          color: pathname?.startsWith('/assets') ? '#fff' : '#94a3b8',
-          borderRadius: 4,
-          background: pathname?.startsWith('/assets') ? '#334155' : 'transparent',
-          fontWeight: pathname?.startsWith('/assets') ? 500 : 400,
-          border: 'none',
-          cursor: 'pointer',
-          whiteSpace: 'nowrap',
-          flexShrink: 0,
-        }}>
-          认证资源 ▾
+        <button onClick={() => setAssetOpen(v => !v)}
+          className={'navLink' + (pathname?.startsWith('/assets') ? ' navLinkActive' : '') + (assetOpen ? ' navLinkOpen' : '')}
+          style={{ border: 'none', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>
+          认证资源
+          <span className="navCaret" aria-hidden="true">▾</span>
         </button>
         {assetOpen && (
           <div style={{
@@ -164,9 +150,9 @@ export default function TopNav() {
             left: 0,
             marginTop: 6,
             background: '#fff',
-            border: '1px solid #e5e7eb',
-            borderRadius: 8,
-            boxShadow: '0 4px 16px rgba(0,0,0,.12)',
+            border: 'none',
+            borderRadius: 14,
+            boxShadow: '0 10px 28px rgba(29,78,216,.18), 0 2px 8px rgba(15,23,42,.10)',
             minWidth: 130,
             overflow: 'hidden',
             zIndex: 200,
@@ -176,10 +162,11 @@ export default function TopNav() {
               return (
                 <Link key={item.href} href={item.href} onClick={() => setAssetOpen(false)} style={{
                   display: 'block',
-                  padding: '10px 14px',
-                  fontSize: 13,
-                  color: active ? '#2563eb' : '#374151',
+                  padding: '12px 16px',
+                  fontSize: 15,
+                  color: active ? '#1d4ed8' : '#334155',
                   textDecoration: 'none',
+                  fontWeight: active ? 600 : 500,
                   background: active ? '#eff6ff' : 'transparent',
                 }}>
                   {item.label}
@@ -193,11 +180,11 @@ export default function TopNav() {
 
       <div ref={menuRef} style={{ marginLeft: 'auto', position: 'relative', flexShrink: 0 }}>
         <button onClick={() => setMenuOpen(v => !v)} style={{
-          width: 28,
-          height: 28,
+          width: 30,
+          height: 30,
           borderRadius: '50%',
-          background: menuOpen ? '#475569' : '#475569',
-          border: '2px solid ' + (menuOpen ? '#94a3b8' : '#64748b'),
+          background: 'rgba(255,255,255,.22)',
+          border: '2px solid ' + (menuOpen ? '#fff' : 'rgba(255,255,255,.55)'),
           cursor: 'pointer',
           display: 'flex',
           alignItems: 'center',
@@ -208,7 +195,7 @@ export default function TopNav() {
           {user?.avatar ? (
             <img src={user.avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
           ) : (
-            <span style={{ fontSize: 13, fontWeight: 700, color: '#fff' }}>
+            <span style={{ fontSize: 15, fontWeight: 700, color: '#fff' }}>
               {(user?.name || user?.username || '?').slice(0, 1).toUpperCase()}
             </span>
           )}
@@ -221,9 +208,9 @@ export default function TopNav() {
             right: 0,
             marginTop: 6,
             background: '#fff',
-            border: '1px solid #e5e7eb',
-            borderRadius: 8,
-            boxShadow: '0 4px 16px rgba(0,0,0,.12)',
+            border: 'none',
+            borderRadius: 14,
+            boxShadow: '0 10px 28px rgba(29,78,216,.18), 0 2px 8px rgba(15,23,42,.10)',
             minWidth: 160,
             overflow: 'hidden',
             zIndex: 200,
@@ -231,9 +218,15 @@ export default function TopNav() {
           }}>
             {user && (
               <div style={{ padding: '10px 14px', borderBottom: '1px solid #f3f4f6' }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: '#111827' }}>{user.name || user.username}</div>
-                {user.quota !== undefined && (
-                  <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
+                <div style={{ fontSize: 15, fontWeight: 600, color: '#111827' }}>{user.name || user.username}</div>
+                {/* quota_enforced 关着就是不限制（后端 lib/quota.js）——
+                    /me 还没回来时先不显示，免得闪一下「剩余 0 次」 */}
+                {user.quota_enforced === false ? (
+                  <div style={{ fontSize: 13, color: '#6b7280', marginTop: 2 }}>
+                    次数不限（已用 {user.used || 0} 次）
+                  </div>
+                ) : user.quota !== undefined && user.quota_enforced !== undefined && (
+                  <div style={{ fontSize: 13, color: '#6b7280', marginTop: 2 }}>
                     剩余 {user.quota - (user.used || 0)} 次 / 共 {user.quota} 次
                   </div>
                 )}
@@ -244,10 +237,11 @@ export default function TopNav() {
               return (
                 <Link key={item.href} href={item.href} onClick={() => setMenuOpen(false)} style={{
                   display: 'block',
-                  padding: '10px 14px',
-                  fontSize: 13,
-                  color: active ? '#2563eb' : '#374151',
+                  padding: '12px 16px',
+                  fontSize: 15,
+                  color: active ? '#1d4ed8' : '#334155',
                   textDecoration: 'none',
+                  fontWeight: active ? 600 : 500,
                   background: active ? '#eff6ff' : 'transparent',
                 }}>
                   {item.label}
@@ -257,8 +251,8 @@ export default function TopNav() {
             <div style={{ borderTop: '1px solid #f3f4f6' }}>
               <button onClick={handleLogout} style={{
                 width: '100%',
-                padding: '10px 14px',
-                fontSize: 13,
+                padding: '12px 16px',
+                fontSize: 15,
                 color: '#dc2626',
                 background: 'none',
                 border: 'none',
@@ -273,23 +267,59 @@ export default function TopNav() {
       </div>
 
       <style jsx global>{`
-        .topNav { padding: 0 12px; gap: 4px; }
+        /* 栏高是全站共用的锚点：voiceover-v3 的 sticky 面包屑贴在它下面，
+           几个页面的 calc(100vh - 栏高) 也按它算 —— 所以写成变量，别再各处硬编码 44px */
+        :root { --topnav-h: 52px; }
+        .topNav { height: var(--topnav-h); padding: 0 12px; gap: 4px; }
         .topNav .brandLogo { gap: 7px; margin-right: 12px; }
-        .topNav .brandIcon { width: 26px; height: 26px; border-radius: 7px; }
-        .topNav .brandIcon svg { width: 16px; height: 16px; }
-        .topNav .brandName { font-size: 14px; }
+        .topNav .brandIcon { width: 28px; height: 28px; border-radius: 9px; }
+        .topNav .brandIcon svg { width: 17px; height: 17px; }
+        .topNav .brandName { font-size: 18px; }
         .topNav .navLinks { gap: 4px; }
-        .topNav .navLink { font-size: 13px; padding: 6px 10px; }
+        /* 药丸导航：选中态是一层磨砂白，不是贴上去的白色纸片 —— 后者在蓝底上
+           对比过硬，切换时像闪一下。这里只加亮底色和字色，位移交给 :active */
+        .topNav .navLink {
+          font-size: 16px;
+          padding: 5px 14px;
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          line-height: 1.5;
+          border-radius: 999px;
+          color: rgba(255,255,255,.78);
+          background: transparent;
+          font-weight: 500;
+          -webkit-tap-highlight-color: transparent;
+          transition: background .18s ease, color .18s ease, transform .12s ease;
+        }
+        .topNav .navLink:hover { color: #fff; background: rgba(255,255,255,.14); }
+        .topNav .navLink:active { transform: scale(.96); }
+        .topNav .navLinkActive,
+        .topNav .navLinkActive:hover {
+          color: #fff;
+          font-weight: 700;
+          background: rgba(255,255,255,.24);
+          box-shadow: inset 0 0 0 1px rgba(255,255,255,.30);
+        }
+        .topNav .navLinkOpen { color: #fff; background: rgba(255,255,255,.18); }
+        .topNav .navCaret {
+          font-size: .72em;
+          opacity: .8;
+          transition: transform .18s ease;
+        }
+        .topNav .navLinkOpen .navCaret { transform: rotate(180deg); }
+        .topNav .brandLogo:active { opacity: .8; }
 
         @media (max-width: 768px) {
+          :root { --topnav-h: 48px; }
           .topNav { padding: 0 10px; }
           .topNav .brandSub { display: none; }
           .topNav .brandLogo { gap: 5px; margin-right: 8px; }
           .topNav .brandIcon { width: 22px; height: 22px; border-radius: 6px; }
           .topNav .brandIcon svg { width: 14px; height: 14px; }
-          .topNav .brandName { font-size: 13px; }
+          .topNav .brandName { font-size: 16.5px; }
           .topNav .navLinks { gap: 3px; }
-          .topNav .navLink { font-size: 12.5px; padding: 5px 8px; }
+          .topNav .navLink { font-size: 14.5px; padding: 5px 10px; }
         }
 
         @media (max-width: 380px) {
@@ -297,9 +327,9 @@ export default function TopNav() {
           .topNav .brandLogo { gap: 4px; margin-right: 5px; }
           .topNav .brandIcon { width: 20px; height: 20px; }
           .topNav .brandIcon svg { width: 13px; height: 13px; }
-          .topNav .brandName { font-size: 12px; }
+          .topNav .brandName { font-size: 14.5px; }
           .topNav .navLinks { gap: 2px; }
-          .topNav .navLink { font-size: 11.5px; padding: 4px 5px; }
+          .topNav .navLink { font-size: 13px; padding: 4px 6px; }
         }
       `}</style>
     </nav>

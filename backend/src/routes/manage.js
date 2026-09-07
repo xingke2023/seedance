@@ -57,6 +57,17 @@ async function manageRoutes(fastify) {
       let url = `/api/v3/contents/generations/tasks?page=${page}&page_size=${page_size}`
       if (status) url += `&status=${status}`
       const result = await authFetchCN(url)
+      // 上游任务列表里失败任务的 error 是 {code, message} 对象，不是字符串（跟单条
+      // /video/task/:taskId 走的 normaliseTask() 不是同一条路径，那边已经转过一次）。
+      // 前端 Task 类型定义的是 error: string | null，直接塞对象进 JSX 会让 React 崩溃
+      // （"Objects are not valid as a React child"）——这里统一转成字符串，不留给前端猜。
+      if (Array.isArray(result?.items)) {
+        for (const item of result.items) {
+          if (item && item.error && typeof item.error === 'object') {
+            item.error = item.error.message || JSON.stringify(item.error)
+          }
+        }
+      }
       return { success: true, data: result }
     } catch (err) {
       return reply.code(500).send({ success: false, error: err.message })

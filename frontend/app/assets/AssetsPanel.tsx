@@ -86,8 +86,9 @@ export function AssetsPanel({ tab }: { tab: AssetTab }) {
 
   const [validateSession, setValidateSession] = useState<{ sessionId: string; h5Link: string } | null>(null);
   const [validatePolling, setValidatePolling] = useState(false);
-  const [validateRegion, setValidateRegion] = useState<'global' | 'cn'>('cn');
-  const [assetRegion, setAssetRegion] = useState<'global' | 'cn'>('cn');
+  // 后端已强制只用国内站 (FIDELITY_CN_ONLY)，国际站选项已下线——不再是可切换的 state
+  const validateRegion = 'cn' as const;
+  const assetRegion = 'cn' as const;
 
   // AI创作 state
   const [showAiChat, setShowAiChat] = useState(false);
@@ -168,8 +169,7 @@ export function AssetsPanel({ tab }: { tab: AssetTab }) {
         setNewGroupName('');
         await loadGroups();
       } else {
-        const endpoint = validateRegion === 'cn' ? '/assets/visual-validate-cn/start' : '/assets/visual-validate/start';
-        const res = await api.post<{ session_id: string; h5_link: string }>(endpoint);
+        const res = await api.post<{ session_id: string; h5_link: string }>('/assets/visual-validate-cn/start');
         setValidateSession({ sessionId: res.session_id, h5Link: res.h5_link });
         setValidatePolling(true);
         pollValidate(res.session_id);
@@ -182,10 +182,9 @@ export function AssetsPanel({ tab }: { tab: AssetTab }) {
   }
 
   async function pollValidate(sessionId: string) {
-    const endpoint = validateRegion === 'cn' ? '/assets/visual-validate-cn' : '/assets/visual-validate';
     const interval = setInterval(async () => {
       try {
-        const res = await api.get<{ status: string; group_id?: string }>(`${endpoint}/${sessionId}`);
+        const res = await api.get<{ status: string; group_id?: string }>(`/assets/visual-validate-cn/${sessionId}`);
         if (res.group_id || res.status === 'completed' || res.status === 'succeeded') {
           clearInterval(interval);
           setValidateSession(null);
@@ -372,22 +371,8 @@ export function AssetsPanel({ tab }: { tab: AssetTab }) {
 
         <div className={styles.createRow}>
           {tab === 'virtual' && (
-            <>
-              <select value={assetRegion} onChange={e => setAssetRegion(e.target.value as 'global' | 'cn')}
-                className={styles.input} style={{ width: 'auto', minWidth: 100 }}>
-                <option value="cn">国内站</option>
-                <option value="global">国际站</option>
-              </select>
-              <input type="text" placeholder="资源组名称" value={newGroupName}
-                onChange={e => setNewGroupName(e.target.value)} className={styles.input} />
-            </>
-          )}
-          {tab === 'real' && (
-            <select value={validateRegion} onChange={e => setValidateRegion(e.target.value as 'global' | 'cn')}
-              className={styles.input} style={{ width: 'auto', minWidth: 100 }}>
-              <option value="cn">国内站</option>
-              <option value="global">国际站</option>
-            </select>
+            <input type="text" placeholder="资源组名称" value={newGroupName}
+              onChange={e => setNewGroupName(e.target.value)} className={styles.input} />
           )}
           <button onClick={createGroup} disabled={creating || (tab === 'virtual' && !newGroupName.trim())}
             className={styles.btnPrimary}>
@@ -401,7 +386,7 @@ export function AssetsPanel({ tab }: { tab: AssetTab }) {
             <h3>真人验证</h3>
             <p>请在手机端完成活体验证：</p>
             <div className={styles.qrWrap}>
-              <img src={`/api/assets/visual-validate${validateRegion === 'cn' ? '-cn' : ''}/${validateSession.sessionId}/qr`} alt="扫码验证" />
+              <img src={`/api/assets/visual-validate-cn/${validateSession.sessionId}/qr`} alt="扫码验证" />
             </div>
             <a href={validateSession.h5Link} target="_blank" rel="noopener noreferrer" className={styles.btnGhost}>
               在当前设备打开验证

@@ -11,6 +11,7 @@ const sdk = require('microsoft-cognitiveservices-speech-sdk')
 const jieba = require('jieba-wasm')
 
 const { UPLOAD_ROOT, localUploadPath, fetchMediaBuffer } = require('../lib/uploads')
+const { writeScript, rewriteScript } = require('../prompt/script')
 
 const execFileAsync = promisify(execFile)
 const UPLOAD_DIR    = UPLOAD_ROOT
@@ -510,26 +511,15 @@ function keepStaticLooks(text) {
   return out || String(text || '').trim()   // 整段都被判成道具时宁可原样返回
 }
 
-  fastify.post('/analyze-script', {
-    schema: {
-      body: {
-        type: 'object',
-        required: ['script'],
-        properties: {
-          script: { type: 'string', maxLength: 5000 },
-        },
-      },
-    },
-  }, async (request, reply) => {
+  // 从写好的剧本里提取角色（DeepSeek，便宜的小请求）。/analyze-script（同步）和
+  // /analyze-script-async（流式，剧本分析按钮实际在用的）共用——不能一个地方一个提示词。
+  async function extractCharacters(dialogueScript) {
     const apiKey  = process.env.STORYBOARD_API_KEY || ''
     const baseUrl = (process.env.STORYBOARD_API_URL || 'https://api.deepseek.com').replace(/\/$/, '')
     const model   = process.env.STORYBOARD_MODEL   || DEFAULT_MODEL
-    if (!apiKey) return reply.code(500).send({ success: false, error: '请配置 STORYBOARD_API_KEY' })
+    if (!apiKey) throw new Error('请配置 STORYBOARD_API_KEY')
 
-    const script = (request.body.script || '').trim()
-    if (!script) return reply.code(400).send({ success: false, error: '请输入剧本内容' })
-
-    const prompt = `你是专业的影视剧本分析师。请分析以下剧本/视频需求，提取出所有需要出现的角色（真人、虚拟人物、动物等有生命的主体）。不要提取场景、物品、建筑等非角色元素。
+    const prompt = `你是专业的影视剧本分析师。请分析以下剧本，提取出所有需要出现的角色（真人、虚拟人物、动物等有生命的主体）。不要提取场景、物品、建筑等非角色元素。
 
 对每个角色，请给出：
 1. 名称（简短标识）
@@ -543,7 +533,7 @@ function keepStaticLooks(text) {
     {
       "label": "角色名称",
       "type": "真人|虚拟人物|动物",
-      "appearance": "外貌描述（40-80字，只含年龄段、性别、发型发色、五官、肤色、体型身高、衣着款式与颜色、随身穿戴的配饰）",
+      "appearance": "外貌描述（80-140字，按顺序覆盖：年龄段与性别、身高体型、发型发色、五官脸型与肤色、上衣下装鞋子的款式颜色材质、随身穿戴的配饰、以及体现性格的稳定外在气质）",
       "personality": "性格/特质描述（30-60字）"
     }
   ]
@@ -551,48 +541,228 @@ function keepStaticLooks(text) {
 
 注意：
 - 只提取角色（有生命的主体），不提取场景、道具、建筑
-- **外貌描述只写不随剧情变化的静态特征**：年龄段、性别、发型发色、五官、肤色、体型身高、
-  衣着款式与颜色、戴在身上的配饰（眼镜、手表、耳环这类）
+- **外貌描述要尽量详细**：这段文字会被逐镜一字不改地贴进每一个分镜的画面提示词，
+  是这个人在全片里唯一的长相依据——写得越具体，每镜长出来的脸和衣服越是同一个人。
+  按这个顺序写全，不要只写三五个词就收尾：
+  年龄段与性别 → 身高体型 → 发型发色 → 五官脸型与肤色 → 上衣/下装/鞋（款式+颜色+材质）
+  → 随身穿戴的配饰（眼镜、手表、耳环、项链、领带…） → 体现性格的稳定外在气质
+- **性格只写成「长在身上」的那一面**：写体态、眼神的习惯性状态、衣着风格传达出来的气质
+  （挺拔干练、含蓄书卷气、松垮随性），不要写「谨慎多疑」「重感情」这类抽象性格词——
+  画面渲染不出抽象性格，写进去只会被当成表情去演
 - **以下一律不许写进外貌**：手里/桌上的道具（手机、文件、计算器、咖啡杯…）、
-  正在做的动作与姿势、表情与眼神（微笑、皱眉…）、所处的场景与背景、光线与镜头。
+  正在做的动作与姿势、当下的表情与眼神（微笑、皱眉…）、所处的场景与背景、光线与镜头。
   这些每个镜头都会变，写进去会让人物形象逐镜漂移
   ✗ 40岁职业人士，西装革履，面带职业微笑，手边放着计算器和文件
-  ✓ 40岁左右男性，短发梳得整齐，戴金丝边眼镜，深灰色西装配白衬衫，体态微胖
+  ✓ 40岁左右男性，身高偏高、体态微胖略显敦实，短发梳得整齐、发色乌黑略有白丝，
+    方脸浓眉、肤色偏黄，深灰色羊毛西装配白衬衫与暗红斜纹领带，黑色皮鞋，
+    戴金丝边眼镜和银色机械腕表，整体是沉稳持重的做派
 - 如果剧本没有明确描述外貌，请根据角色定位合理推断
 - 直接输出JSON，不要加其他文字
 
 剧本内容：
-${script}`
+${dialogueScript}`
+
+    const res = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.3,
+        max_tokens: 2048,
+      }),
+      signal: AbortSignal.timeout(30_000),
+    })
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '')
+      throw new Error(`AI API error ${res.status}: ${errText.slice(0, 200)}`)
+    }
+    const data = await res.json()
+    const rawText = data.choices?.[0]?.message?.content?.trim() || ''
+    const jsonMatch = rawText.match(/\{[\s\S]*"subjects"\s*:\s*\[[\s\S]*\]\s*\}/)
+    if (!jsonMatch) throw new Error('AI 返回格式异常')
+    const parsed = JSON.parse(jsonMatch[0])
+    return (parsed.subjects || []).map(sub => ({
+      ...sub,
+      appearance: keepStaticLooks(sub.appearance),
+    }))
+  }
+
+  const ANALYZE_SCRIPT_BODY_SCHEMA = {
+    type: 'object',
+    required: ['script'],
+    properties: {
+      script:          { type: 'string', maxLength: 5000 },   // 页面「视频概念描述」textarea 的内容——是故事种子，不是写好的剧本
+      creative_goal:   { type: 'string', maxLength: 200 },
+      target_audience: { type: 'string', maxLength: 200 },
+      overall_tone:    { type: 'string', maxLength: 200 },
+      key_messages:    { type: 'string', maxLength: 500 },
+      duration_total:  { type: 'string', maxLength: 50 },
+    },
+  }
+
+  fastify.post('/analyze-script', {
+    schema: { body: ANALYZE_SCRIPT_BODY_SCHEMA },
+  }, async (request, reply) => {
+    const concept = (request.body.script || '').trim()
+    if (!concept) return reply.code(400).send({ success: false, error: '请输入剧本内容' })
+
+    // 「剧本分析」按钮现在做两件事：先把完整对白剧本写完（和 /prompt/storyboard 叙事
+    // 短片第一步同一个函数、同一套拼法），再从这份写好的剧本里提取角色——剧本里的人物
+    // 有名有姓、说着具体的台词，比直接分析一段概念描述提取得准。写剧本这步会明显变慢
+    // （Claude 生成剧本 vs 原来纯 DeepSeek 抽取角色），但两件事一次做完，好过分两次点两个按钮。
+    let dialogueScript
+    try {
+      dialogueScript = await writeScript({
+        concept,
+        creativeGoal:   request.body.creative_goal,
+        targetAudience: request.body.target_audience,
+        overallTone:    request.body.overall_tone,
+        keyMessages:    request.body.key_messages,
+        durationTotal:  request.body.duration_total,
+      })
+    } catch (err) {
+      return reply.code(500).send({ success: false, error: `剧本生成失败：${err.message}` })
+    }
 
     try {
-      const res = await fetch(`${baseUrl}/v1/chat/completions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-        body: JSON.stringify({
-          model,
-          messages: [{ role: 'user', content: prompt }],
-          temperature: 0.3,
-          max_tokens: 2048,
-        }),
-        signal: AbortSignal.timeout(30_000),
-      })
-      if (!res.ok) {
-        const errText = await res.text().catch(() => '')
-        throw new Error(`AI API error ${res.status}: ${errText.slice(0, 200)}`)
-      }
-      const data = await res.json()
-      const rawText = data.choices?.[0]?.message?.content?.trim() || ''
-      const jsonMatch = rawText.match(/\{[\s\S]*"subjects"\s*:\s*\[[\s\S]*\]\s*\}/)
-      if (!jsonMatch) throw new Error('AI 返回格式异常')
-      const parsed = JSON.parse(jsonMatch[0])
-      const subjects = (parsed.subjects || []).map(sub => ({
-        ...sub,
-        appearance: keepStaticLooks(sub.appearance),
-      }))
-      return { success: true, data: { subjects } }
+      const subjects = await extractCharacters(dialogueScript)
+      return { success: true, data: { subjects, script: dialogueScript } }
     } catch (err) {
-      return reply.code(500).send({ success: false, error: err.message })
+      // 角色提取失败也把已经写好的剧本带回去——剧本才是这次调用里贵的那部分（Claude），
+      // 角色提取是 DeepSeek 的小请求，失败了大不了页面上没有角色卡，不该把剧本也搭进去重写
+      return reply.code(500).send({ success: false, error: err.message, script: dialogueScript })
     }
+  })
+
+  // ── 异步剧本分析：流式吐对白剧本 ────────────────────────────────────────
+  // 「剧本分析」按钮点下去要等 Claude 把剧本写完（十几秒到几十秒），页面想在等待期间
+  // 就把正在写的字实时显示出来，不是干等一个转圈。做法和 /prompt/storyboard-async
+  // 一样：SCRIPT_SYSTEM 走流式，onText 每收到一段新文本就把累计全文写回任务状态，
+  // 页面轮询跟着刷；写完剧本再顺带跑角色提取（DeepSeek，快，不流式）。
+  // 不需要 storyboard 那套 localStorage 断线重连——这个操作短，用户就在当前页面等着。
+  const scriptJobs = new Map()
+
+  fastify.post('/analyze-script-async', {
+    schema: { body: ANALYZE_SCRIPT_BODY_SCHEMA },
+  }, async (request, reply) => {
+    const concept = (request.body.script || '').trim()
+    if (!concept) return reply.code(400).send({ success: false, error: '请输入剧本内容' })
+
+    const jobId = crypto.randomUUID()
+    scriptJobs.set(jobId, { status: 'processing', stage: 'script', script: '', startedAt: Date.now() })
+
+    const body = request.body
+    ;(async () => {
+      try {
+        const dialogueScript = await writeScript({
+          concept,
+          creativeGoal:   body.creative_goal,
+          targetAudience: body.target_audience,
+          overallTone:    body.overall_tone,
+          keyMessages:    body.key_messages,
+          durationTotal:  body.duration_total,
+          onText: (snapshot) => {
+            const prev = scriptJobs.get(jobId)
+            if (prev) scriptJobs.set(jobId, { ...prev, script: snapshot })
+          },
+        })
+        const afterScript = scriptJobs.get(jobId)
+        if (!afterScript) return   // 过期被清了，结果直接丢弃
+        scriptJobs.set(jobId, { ...afterScript, stage: 'analyzing', script: dialogueScript })
+
+        let subjects = []
+        try {
+          subjects = await extractCharacters(dialogueScript)
+        } catch (e) {
+          // 角色提取失败不阻断——剧本才是贵的那部分，宁可交付没有角色卡的剧本
+          fastify.log.warn({ err: e }, 'character extraction failed; script still returned')
+        }
+        const prev = scriptJobs.get(jobId)
+        if (prev) scriptJobs.set(jobId, { ...prev, status: 'done', subjects, script: dialogueScript })
+      } catch (err) {
+        const prev = scriptJobs.get(jobId)
+        if (prev) scriptJobs.set(jobId, { ...prev, status: 'failed', error: err.message || '剧本生成失败' })
+      }
+    })()
+
+    return { success: true, data: { jobId } }
+  })
+
+  // 取结果就删——这个任务短，不需要 storyboard 那套「刷新页面也能取到」，
+  // 拖着不删反而是白占内存
+  fastify.get('/analyze-script-status/:jobId', async (request, reply) => {
+    const job = scriptJobs.get(request.params.jobId)
+    if (!job) return { success: true, data: { status: 'expired', error: '任务不存在或已过期' } }
+    if (job.status === 'done') {
+      scriptJobs.delete(request.params.jobId)
+      return { success: true, data: { status: 'done', subjects: job.subjects, script: job.script } }
+    }
+    if (job.status === 'failed') {
+      scriptJobs.delete(request.params.jobId)
+      return { success: true, data: { status: 'failed', error: job.error, script: job.script } }
+    }
+    return { success: true, data: { status: 'processing', stage: job.stage, script: job.script } }
+  })
+
+  // ── AI改写对白剧本：拿页面上已经写好的剧本原文 + 一句改写要求，流式吐出改完的整份剧本 ──
+  // 和「剧本分析」流式任务同一套路（各管各的，没合并成通用任务模块）：onText 每收到
+  // 一段新文本就把累计全文写回任务状态，页面轮询跟着实时刷新浮窗里的预览。
+  const rewriteJobs = new Map()
+
+  const REWRITE_SCRIPT_BODY_SCHEMA = {
+    type: 'object',
+    required: ['script', 'instruction'],
+    properties: {
+      script:      { type: 'string', maxLength: 20000 },
+      instruction: { type: 'string', minLength: 1, maxLength: 2000 },
+    },
+  }
+
+  fastify.post('/rewrite-script-async', {
+    schema: { body: REWRITE_SCRIPT_BODY_SCHEMA },
+  }, async (request, reply) => {
+    const script      = (request.body.script || '').trim()
+    const instruction = (request.body.instruction || '').trim()
+    if (!script) return reply.code(400).send({ success: false, error: '没有可改写的剧本' })
+    if (!instruction) return reply.code(400).send({ success: false, error: '请输入改写要求' })
+
+    const jobId = crypto.randomUUID()
+    rewriteJobs.set(jobId, { status: 'processing', script: '', startedAt: Date.now() })
+
+    ;(async () => {
+      try {
+        const rewritten = await rewriteScript({
+          script, instruction,
+          onText: (snapshot) => {
+            const prev = rewriteJobs.get(jobId)
+            if (prev) rewriteJobs.set(jobId, { ...prev, script: snapshot })
+          },
+        })
+        const prev = rewriteJobs.get(jobId)
+        if (prev) rewriteJobs.set(jobId, { ...prev, status: 'done', script: rewritten })
+      } catch (err) {
+        const prev = rewriteJobs.get(jobId)
+        if (prev) rewriteJobs.set(jobId, { ...prev, status: 'failed', error: err.message || '改写失败' })
+      }
+    })()
+
+    return { success: true, data: { jobId } }
+  })
+
+  // 取结果就删——和 analyze-script-status 同样的理由：操作短，用户就在当前浮窗里等着
+  fastify.get('/rewrite-script-status/:jobId', async (request, reply) => {
+    const job = rewriteJobs.get(request.params.jobId)
+    if (!job) return { success: true, data: { status: 'expired', error: '任务不存在或已过期' } }
+    if (job.status === 'done') {
+      rewriteJobs.delete(request.params.jobId)
+      return { success: true, data: { status: 'done', script: job.script } }
+    }
+    if (job.status === 'failed') {
+      rewriteJobs.delete(request.params.jobId)
+      return { success: true, data: { status: 'failed', error: job.error, script: job.script } }
+    }
+    return { success: true, data: { status: 'processing', script: job.script } }
   })
 
   fastify.post('/generate-script', {

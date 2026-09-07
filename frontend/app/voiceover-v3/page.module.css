@@ -12,7 +12,7 @@
 
 /* ─── Body ───────────────────────────────────────────────────────────────── */
 .body { padding-top: 0; }
-.breadcrumbBar { position: -webkit-sticky; position: sticky; top: 44px; z-index: 90; display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: #f8fafc; border-bottom: 1px solid #e5e7eb; gap: 8px; }
+.breadcrumbBar { position: -webkit-sticky; position: sticky; top: var(--topnav-h, 52px); z-index: 90; display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: #f8fafc; border-bottom: 1px solid #e5e7eb; gap: 8px; }
 .mobileParams { padding: 12px 12px 16px; margin-bottom: 12px; }
 .wrap { max-width: 1536px; margin: 0 auto; padding: 8px 12px 12px; }
 .layout { display: flex; flex-direction: column; gap: 16px; }
@@ -68,11 +68,44 @@
 .shotMeta { min-width: 0; }
 .shotTitle { font-size: 13px; font-weight: 600; color: #111827; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .shotDesc { font-size: 12px; color: #6b7280; margin: 2px 0 0; }
+.shotDescRow { flex-basis: 100%; width: 100%; font-size: 12px; line-height: 1.6; color: #6b7280; margin: 2px 0 0; }
 .shotBtns { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; }
 .moodTag { display: inline-flex; align-items: center; gap: 3px; border-radius: 9999px; border: 1px solid #e5e7eb; padding: 2px 8px; font-size: 11px; background: #f9fafb; color: #6b7280; margin: 8px 0; }
 .movTag { display: inline-flex; align-items: center; gap: 3px; border-radius: 9999px; border: 1px solid #99f6e4; padding: 2px 8px; font-size: 11px; background: #f0fdfa; color: #0f766e; margin: 8px 0 8px 6px; }
 .fieldLabel { display: block; font-size: 11px; color: #1a1a1a; margin-bottom: 4px; font-weight: 700; }
 .fieldLabel::before { content: '• '; }
+.shotTabs { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin: 10px 0 8px; padding-bottom: 6px; border-bottom: 1px solid #e5e7eb; }
+.shotTab { padding: 3px 9px; border: 1px solid #e5e7eb; border-radius: 5px; background: #fff; color: #6b7280; font-size: 11px; cursor: pointer; white-space: nowrap; -webkit-tap-highlight-color: transparent; }
+.shotTab:hover { color: #374151; border-color: #d1d5db; }
+.shotTabOn { border-color: #2563eb; background: #eff6ff; color: #2563eb; font-weight: 600; }
+.shotTabOn:hover { color: #2563eb; border-color: #2563eb; }
+.shotTabDot { margin-left: 4px; font-size: 10px; color: #b45309; background: #fffbeb; border-radius: 3px; padding: 0 3px; }
+.shotTabOn .shotTabDot { color: #b45309; background: #fffbeb; }
+/* 视频描述框 + 「剧本分析」按钮。
+   桌面：按钮照旧居中排在框下面；手机：两者并排，按钮拉到和输入框一样高 */
+.conceptRow { margin-bottom: 10px; text-align: center; }
+.conceptBox { text-align: left; }
+.conceptAnalyzeBtn { margin-top: 10px; font-size: 15px; padding: 9px 18px; border-radius: 6px; border: none; background: #2563eb; color: #fff; font-weight: 600; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.conceptAnalyzeBtn:disabled { background: #93c5fd; cursor: not-allowed; }
+.brMobile { display: none; }
+
+@media (max-width: 768px) {
+  .conceptRow { display: flex; align-items: stretch; gap: 8px; text-align: left; }
+  .conceptBox { flex: 1; min-width: 0; }
+  .conceptAnalyzeBtn { margin-top: 0; width: 56px; flex-shrink: 0; padding: 8px 4px; font-size: 14px; line-height: 1.5; white-space: normal; }
+  .brMobile { display: inline; }
+}
+
+/* 对白剧本 / 角色 / 参考素材 —— 分段控件式的圆角页签，整组坐在浅灰底上 */
+.stepTabs { display: inline-flex; align-items: center; gap: 2px; flex-wrap: wrap; margin: 2px 0 8px; padding: 2px; border-radius: 999px; background: #e2e8f0; }
+.stepTab { padding: 1px 12px; line-height: 1.45; border: none; border-radius: 999px; background: transparent; color: #475569; font-weight: 600; font-size: 11.5px; cursor: pointer; white-space: nowrap; -webkit-tap-highlight-color: transparent; }
+.stepTab:hover { color: #1e293b; background: rgba(255,255,255,.7); }
+.stepTabOn { background: #1d4ed8; color: #fff; font-weight: 700; box-shadow: 0 1px 3px rgba(29,78,216,.4); }
+.stepTabOn:hover { color: #fff; background: #1d4ed8; }
+
+.shotTabOk { margin-left: 4px; font-size: 10px; color: #16a34a; }
+.shotTabOn .shotTabOk { color: #16a34a; }
+
 .jsonDetails { margin-top: 6px; }
 .jsonDetails summary { list-style: none; }
 .jsonDetails summary::-webkit-details-marker { display: none; }
@@ -87,11 +120,11 @@
 
 /* ─── Merge section ──────────────────────────────────────────────────────── */
 .mergeBox { border: 1px solid #99f6e4; border-radius: 8px; background: #f0fdfa; padding: 14px 16px; }
-.mergeTitle { font-size: 13px; font-weight: 600; color: #0f766e; margin: 0 0 2px; }
+.mergeTitle { font-size: 16px; font-weight: 700; color: #0f766e; margin: 0 0 4px; }
 .mergeSub { font-size: 12px; color: #0d9488; margin: 0; }
 .mergeFooter { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
 .mergeStat { font-size: 12px; color: #0d9488; }
-.mergedResult { padding-top: 10px; border-top: 1px solid #99f6e4; margin-top: 10px; text-align: center; }
+.mergedResult { padding-top: 0; margin-top: 0; text-align: left; }
 .mergedTitle { font-size: 15px; font-weight: 600; color: #0f766e; margin: 0 0 8px; }
 .mergedVideo { max-width: 320px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.1); }
 .mergedActions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
@@ -101,11 +134,23 @@
 .btnPrimary:disabled { background: #93c5fd; cursor: not-allowed; }
 .btnSmTeal { padding: 8px 20px; border-radius: 8px; font-size: 14px; font-weight: 600; background: #2563eb; color: #fff; border: none; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .btnSmTeal:disabled { background: #93c5fd; cursor: not-allowed; }
+
+/* 红色主按钮：留给「生成分镜脚本 / 重新生成分镜脚本」「一键生成所有分镜视频」——
+   这三个都是要花钱、要跑很久、且会覆盖已有结果的动作，和普通蓝按钮区分开 */
+.btnDanger { padding: 10px 16px; border-radius: 8px; background: #dc2626; color: #fff; font-size: 14px; font-weight: 600; border: none; cursor: pointer; -webkit-tap-highlight-color: transparent; font-family: inherit; width: 100%; }
+.btnDanger:hover:not(:disabled) { background: #b91c1c; }
+.btnDanger:disabled { background: #fca5a5; cursor: not-allowed; }
+.btnSmDanger { padding: 8px 20px; border-radius: 8px; font-size: 14px; font-weight: 600; background: #dc2626; color: #fff; border: none; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.btnSmDanger:hover:not(:disabled) { background: #b91c1c; }
+.btnSmDanger:disabled { background: #fca5a5; cursor: not-allowed; }
 .btnSmGreen { padding: 4px 12px; border-radius: 6px; font-size: 12px; font-weight: 500; background: #16a34a; color: #fff; border: none; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .btnSmGreen:disabled { background: #86efac; cursor: not-allowed; }
 .btnOutline { padding: 4px 12px; border-radius: 6px; border: 1px solid #99f6e4; background: #fff; font-size: 12px; color: #0d9488; cursor: pointer; -webkit-tap-highlight-color: transparent; font-family: inherit; }
 .btnOutlineGreen { border-color: #86efac; color: #15803d; }
-.btnShotGen { padding: 5px 12px; border-radius: 6px; border: none; background: #2563eb; font-size: 12px; color: #fff; font-weight: 500; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+/* 分镜卡上的「生成视频N / 重新生成」：和「生成分镜脚本」「一键生成所有分镜视频」
+   同属要花钱跑的动作，统一用红色 */
+.btnShotGen { padding: 5px 12px; border-radius: 6px; border: none; background: #dc2626; font-size: 12px; color: #fff; font-weight: 500; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.btnShotGen:hover:not(:disabled) { background: #b91c1c; }
 .btnShotGen:disabled { opacity: .4; cursor: not-allowed; }
 
 /* ─── Status badges ──────────────────────────────────────────────────────── */
@@ -216,6 +261,9 @@
   .shotDesc { font-size: 13px; }
   .fieldLabel { font-size: 13px; }
   .statChip { font-size: 13px; }
+  /* 手机上页签照常换行（生成按钮会掉到第二行，仍然点得到），只是把点击区做大 */
+  .shotTab { font-size: 12px; padding: 5px 11px; }
+  .stepTab { font-size: 12.5px; padding: 2px 14px; }
 }
 
 /* ─── Shot AI Reference Image Modal ─── */

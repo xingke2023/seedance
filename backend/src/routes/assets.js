@@ -2,6 +2,7 @@
 
 const { getFidelityToken } = require('../video/service')
 const { query } = require('../db')
+const { CN_ONLY } = require('../lib/region')
 
 const FIDELITY_BASE_URL = process.env.FIDELITY_BASE_URL || 'https://videogen.fidelityai.cn'
 const FIDELITY_CN_BASE_URL = process.env.FIDELITY_CN_BASE_URL || 'https://vidgen.fidelityai.cn'
@@ -73,7 +74,9 @@ async function assetFetchCN(action, body = {}) {
 }
 
 function getAssetFetcher(region) {
-  return region === 'cn' ? assetFetchCN : assetFetch
+  // 只用国内站模式：不管调用方传的 region 是什么，一律走国内站——和
+  // video.js 的 resolveRegionOverrides 同一个道理，开这个开关就不留任何走国际站的分支。
+  return (CN_ONLY || region === 'cn') ? assetFetchCN : assetFetch
 }
 
 async function getUserGroupIds(userId, groupType) {

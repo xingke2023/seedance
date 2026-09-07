@@ -83,6 +83,8 @@ export interface ProjectSubject {
   sort_order: number;
   created_at: string;
   updated_at: string;
+  /** 只有 GET /projects/:id/subjects?used=1 会带：这个角色被本项目几条视频用到 */
+  video_count?: number;
 }
 
 export interface Video {
