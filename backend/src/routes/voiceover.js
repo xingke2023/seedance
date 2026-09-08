@@ -601,6 +601,29 @@ ${dialogueScript}`
     },
   }
 
+  // 只提取角色，不重写剧本 —— 页面上已经有一份对白剧本（写好的、或用户自己改过的），
+  // 想按它重新提一遍角色时用这条。走 /analyze-script 会把剧本连同角色一起重写一遍
+  // （那是 Claude 的贵调用，而且用户手改过的剧本会被覆盖掉），这里只跑 DeepSeek 那一步，
+  // 快、便宜、剧本原样不动，所以不需要做成异步任务。
+  fastify.post('/extract-characters', {
+    schema: {
+      body: {
+        type: 'object',
+        required: ['script'],
+        properties: { script: { type: 'string', minLength: 1, maxLength: 20000 } },
+      },
+    },
+  }, async (request, reply) => {
+    const dialogueScript = (request.body.script || '').trim()
+    if (!dialogueScript) return reply.code(400).send({ success: false, error: '请先写好对白剧本' })
+    try {
+      const subjects = await extractCharacters(dialogueScript)
+      return { success: true, data: { subjects } }
+    } catch (err) {
+      return reply.code(500).send({ success: false, error: `角色提取失败：${err.message}` })
+    }
+  })
+
   fastify.post('/analyze-script', {
     schema: { body: ANALYZE_SCRIPT_BODY_SCHEMA },
   }, async (request, reply) => {

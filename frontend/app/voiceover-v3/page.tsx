@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, useRef, useState, useEffect, useCallback, useMemo } from 'react';
+import { Fragment, useRef, useState, useEffect, useLayoutEffect, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useVirtualizer } from '@tanstack/react-virtual';
@@ -394,12 +394,15 @@ const DEFAULT_BANNER_STYLE: BannerStyle = {
 };
 
 const TERMINAL = new Set(['succeeded', 'failed', 'expired', 'cancelled']);
+// 分镜看法（横排标签 / 竖排列表）记在本地，换个视频、刷新页面都保持上次选的
+const SHOT_VIEW_KEY = 'voiceover-v3:shot-view';
 
-// 展开的分镜卡按页签分区：场景描述最常改，放第一个；提交 JSON 是排查用的，放最后
+// 展开的分镜卡按页签分区：字幕放第一个（最常核对）；提交 JSON 是排查用的，放最后
 const SHOT_TABS = [
-  ['prompt',   '场景描述'],
   ['subtitle', '字幕'],
+  ['prompt',   '提示词'],
   ['params',   '参数'],
+  ['refs',     '参考图'],
   ['json',     'JSON'],
   ['preview',  '预览'],
 ] as const;
@@ -474,6 +477,115 @@ function normalizeCameraMove(raw: string): string {
   if (CAMERA_MOVEMENTS.some(o => o.value === v)) return v;
   for (const [re, label] of CAMERA_MOVE_RULES) if (re.test(v)) return label;
   return v;
+}
+
+// ── 分镜提示词的分段 ────────────────────────────────────────────────────
+// 一条 prompt_en 其实是四段拼起来的，来源和「谁说了算」各不相同（见 CLAUDE.md
+// 「角色锚定」「字幕就是台词的准绳」）：
+//   开场声明 —— 模型写的格式/风格声明句（skill seedance-2-0-prompting 的 ①）
+//   角色定义 —— `将@图片N中<外貌原文>定义为<主体N>；` 固定句式。**后端按角色卡原文逐镜统一贴**
+//               （lockSubjectAnchors），提交生成时还会再锁一次，所以在这里改只在本次提交前有效
+//   画面描述 —— 真正属于这一镜的场景/动作/节拍，改这里才是改这一镜
+//   台词     —— appendSpeech 追加的对白/画外音块，提交时按字幕重建（syncSpeechWithSubtitle）
+// 全塞进一个 textarea 时，逐镜一字不差的定义句和逐镜都不同的画面描述混在一起，
+// 眼睛得自己去找边界。拆成四个框只是**显示**上的拆分：join 回去仍是同一条 prompt，
+// 不改任何提交逻辑。
+//
+// 定义句的正则和后端 anchor.js 的 MODEL_DEF 保持同一套写法（含标签后补写的中文短句），
+// 一处放宽两处都要跟着改。多个角色的定义句是连着写的（`…<主体1>；将…<主体2>；`），
+// 所以取第一句开头到最后一句结尾的整段 —— 中间万一夹了别的字也一并留在这一段里，
+// 反正 join 是逐字拼回去的，不会丢。
+const SHOT_DEF_RE = /将[^；;。\n]{0,30}?[<@]?\s*图片\s*\d+\s*>?\s*中[^；;。\n]*?定义为\s*[<【]?\s*主体\s*\d+\s*[>】]?(?:\s*[，,](?!\s*[A-Za-z])[^；;。，,\n]*)*\s*[；;]?/g;
+// 台词块的抬头（appendSpeech 写的那两句），从它所在行的行首开始算台词段
+const SHOT_SPEECH_RE = /Dialogue \(spoken|Off-screen voiceover \(/;
+
+type ShotPromptParts = { head: string; defs: string; body: string; speech: string };
+
+// 提示词分段用的输入框：**高度跟着内容走**，不给固定行数。
+// 分段之后每段长短差得很远（开场一句话、画面描述一大段、台词块可能十几行），
+// 固定行数不是空掉半个框就是要在小窗里滚 —— 电脑版屏幕宽，一行能放的字多，
+// 按字数估行数更是估不准，所以直接量 scrollHeight。
+// 窗口宽度变了要重量一次（换行数跟着变）；超过 70vh 才出滚动条，免得一段超长台词把页面撑爆。
+function AutoTextarea({ value, onChange, placeholder, className }: {
+  value: string;
+  onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
+  placeholder?: string;
+  className?: string;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const fit = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight + 2}px`;   // +2 给上下边框
+  }, []);
+  useLayoutEffect(fit, [value, fit]);
+  useEffect(() => {
+    window.addEventListener('resize', fit);
+    return () => window.removeEventListener('resize', fit);
+  }, [fit]);
+  return (
+    <textarea ref={ref} value={value} onChange={onChange} placeholder={placeholder} className={className}
+      style={{ marginTop: 0, maxHeight: '70vh', overflowY: 'auto', resize: 'vertical' }} />
+  );
+}
+
+// 「选取角色」用：把页面的角色原文（buildSubjectContext().characterDefs，一行一个角色）
+// 解成可选项，并按**和后端 anchor.js 逐字相同**的句式拼出定义句 ——
+// 句式不一致的话，这里插好的句子提交时又会被后端的原文锁换掉，等于白改。
+const CHAR_LINE_RE = /^\s*角色\s*[「『"']?(.*?)[」』"']?\s*绑定\s*[<@]?\s*图片\s*(\d+)\s*>?[^，,]*[，,]\s*外貌描述\s*[：:]\s*(.+)$/;
+
+function subjectAnchorOptions(characterDefs: string) {
+  const out: Array<{ num: number; name: string; anchor: string }> = [];
+  for (const line of (characterDefs || '').split('\n')) {
+    const m = line.match(CHAR_LINE_RE);
+    if (!m) continue;
+    const num = Number(m[2]);
+    const desc = m[3].trim();
+    // 外貌写着「见图片」「未提供」的不给选 —— 贴一句空定义还不如不贴（后端也是这么判的）
+    if (!num || !desc || desc === '见图片' || desc === '未提供') continue;
+    out.push({ num, name: m[1].trim(), anchor: `将@图片${num}中${desc}定义为<主体${num}>` });
+  }
+  return out.sort((a, b) => a.num - b.num);
+}
+
+function splitShotPrompt(prompt: string): ShotPromptParts {
+  const text = prompt || '';
+  const sp = SHOT_SPEECH_RE.exec(text);
+  let speechAt = text.length;
+  if (sp) {
+    const lineStart = text.lastIndexOf('\n', sp.index);
+    speechAt = lineStart >= 0 ? lineStart + 1 : sp.index;
+  }
+  const main = text.slice(0, speechAt);
+  const defs = [...main.matchAll(SHOT_DEF_RE)];
+  if (defs.length === 0) {
+    return { head: '', defs: '', body: main.trim(), speech: text.slice(speechAt).trim() };
+  }
+  const first = defs[0];
+  const last = defs[defs.length - 1];
+  const defEnd = (last.index ?? 0) + last[0].length;
+  return {
+    head:   main.slice(0, first.index ?? 0).trim(),
+    defs:   main.slice(first.index ?? 0, defEnd).trim(),
+    // 定义句后面常跟一个模型自己写的句末标点（锁定义句时只换到 `；` 为止，
+    // 模型写的那个 `。` 会留下来，成了 `…<主体2>；。场景…`）—— 别让画面描述以它开头
+    body:   main.slice(defEnd).replace(/^[\s。；;，,]+/, '').trim(),
+    speech: text.slice(speechAt).trim(),
+  };
+}
+
+function joinShotPrompt(parts: ShotPromptParts): string {
+  const head = parts.head.trim();
+  const defs = parts.defs.trim().replace(/[；;]\s*$/, '');
+  const body = parts.body.trim();
+  const speech = parts.speech.trim();
+  // 定义句和后面的画面描述之间用「；」接上 —— 后端锁定义句时拼的就是这个形状
+  const main = [head, defs ? `${defs}；` : '', body]
+    .filter(Boolean)
+    .join(' ')
+    .replace(/；\s+/g, '；');
+  return [main, speech].filter(Boolean).join('\n\n');
 }
 
 // 分镜属性标签条：景别 / A-B roll / 情绪 / 光影氛围 / 运镜 / 时长 / 主体 / 3D。
@@ -898,7 +1010,8 @@ function VideoThumb({ src, ratio = '9:16', subtitle }: { src: string; ratio?: st
   return (
     <>
       <div className={styles.videoThumbWrap} onClick={() => setOpen(true)} style={{ cursor: 'pointer' }}>
-        <video src={src} style={{ aspectRatio: `${w||9}/${h||16}`, height: 100, width: 'auto', display: 'block', borderRadius: 6, border: '1px solid #e5e7eb', objectFit: 'cover' }}
+        <video src={src} muted playsInline preload="metadata"
+          style={{ aspectRatio: `${w||9}/${h||16}`, height: 100, width: 'auto', display: 'block', borderRadius: 6, border: '1px solid #e5e7eb', objectFit: 'cover' }}
           className={styles.videoThumb} title="点击预览" />
       </div>
       {open && (
@@ -1244,6 +1357,9 @@ function ParamsPanel(p: {
 
 // ─── Main ────────────────────────────────────────────────────────────────────
 
+// AI改写浮窗里的常用要求，点一下追加进输入框
+const REWRITE_PRESETS = ['更口语一点', '节奏更紧凑', '加强冲突', '结尾改成开放式', '台词再短一些', '语气更轻松'];
+
 export default function VoiceoverPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -1335,10 +1451,18 @@ export default function VoiceoverPage() {
 
   const [resetKey, setResetKey]             = useState(0);
   const [dataLoaded, setDataLoaded] = useState(false);
+  useEffect(() => {
+    try { const v = localStorage.getItem(SHOT_VIEW_KEY); if (v === 'list' || v === 'tabs') setShotView(v); } catch {}
+  }, []);
+  // 分镜有两种看法，可以随时切换（选择记在 localStorage 里，下次进来还是这个）：
+  //   tabs（默认）横排标签，点哪个看哪个 —— 分镜之间来回比对时不用滚来滚去
+  //   list        竖排列表，每张卡各自展开/折叠 —— 想一眼扫完全部标题和状态时更好使
+  const [activeShot, setActiveShot]         = useState(0);
+  const [shotView, setShotView]             = useState<'tabs' | 'list'>('tabs');
   const [expandedShots, setExpandedShots]   = useState<Record<number, boolean>>({});
-  // 展开的分镜卡分成四个页签，各记各的（默认「场景描述」——最常改的那一页）
-  const [shotTabs, setShotTabs]             = useState<Record<number, ShotTabKey>>({});
   const [allShotsExpanded, setAllShotsExpanded] = useState(false);
+  // 展开的分镜卡分成几个页签，各记各的（默认「字幕」）
+  const [shotTabs, setShotTabs]             = useState<Record<number, ShotTabKey>>({});
   const [cameraEditorIdx, setCameraEditorIdx] = useState<number | null>(null);
   const [shotMediaIdx, setShotMediaIdx] = useState<number | null>(null);
   const [showProjectPicker, setShowProjectPicker] = useState(false);
@@ -1354,6 +1478,7 @@ export default function VoiceoverPage() {
   // 「剧本分析」按钮写出来的完整对白剧本 —— 和「生成分镜脚本」第一步是同一份东西，
   // 提前写好了就存这里，点「生成分镜脚本」时直接带过去，后端不用再重写一遍
   const [dialogueScript, setDialogueScript] = useState('');
+  const [extractingRoles, setExtractingRoles] = useState(false);
   // 「AI改写」浮窗：改写要求 + 改写中的流式预览（复用剧本分析同一套流式轮询手法）
   const [rewriteOpen, setRewriteOpen] = useState(false);
   const [rewriteInstruction, setRewriteInstruction] = useState('');
@@ -1827,6 +1952,92 @@ export default function VoiceoverPage() {
     setDirtyShotIdxs(prev => new Set(prev).add(idx));
   }
 
+  // 在最后一镜后面加一个空分镜。落库走 POST /videos/:id/shots —— 那条接口本来就是
+  // 按现有 MAX(shot_number) 往后接着排号的，正好就是「加在最后」。
+  // 建完把它选中：加一镜就是为了马上去写它。
+  const [addingShot, setAddingShot] = useState(false);
+  async function addShot() {
+    if (addingShot) return;
+    setAddingShot(true);
+    try {
+      const n = shots.length + 1;
+      const draft: VoiceoverShot = {
+        shot_number: n, title: `分镜 ${n}`, subtitle: '', description: '', prompt: '',
+        duration: 5, ratio, shot_size: '', camera_movement: '', mood: '', roll_type: 'b_roll',
+        subjects: [], shot_subjects: [],
+      };
+      let created: VoiceoverShot = draft;
+      if (videoId) {
+        const rows = await api.post<any[]>(`/videos/${videoId}/shots`, {
+          shots: [{ title: draft.title, description: '', prompt: '', subtitle: '', duration: draft.duration, ratio: draft.ratio, roll_type: draft.roll_type,
+                    subjects: videoSubjects.map(vs => ({ label: vs.label, image_url: vs.image_url || '' })) }],
+        });
+        const row = rows?.[0];
+        if (row) created = { ...draft, id: row.id, shot_number: row.shot_number ?? n };
+      }
+      setShots(prev => [...prev, created]);
+      setInitResult(prev => prev ? { ...prev, shotCount: prev.shotCount + 1, totalVideoDuration: prev.totalVideoDuration + created.duration } : prev);
+      setActiveShot(shots.length);
+      setExpandedShots(prev => ({ ...prev, [shots.length]: true }));
+      setShotTabs(prev => ({ ...prev, [shots.length]: 'prompt' }));
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : '添加分镜失败');
+    } finally { setAddingShot(false); }
+  }
+
+  // 删掉某一镜。后端 DELETE /shots/:id 自己会把剩下的 shot_number 重排，页面这边麻烦的是
+  // **所有按下标存的表都要跟着往前挪一格**（tasks / shotTabs / expandedShots / shotJsonEdits /
+  // dirtyShotIdxs），漏一个就是改了这一镜显示到那一镜身上。
+  // 轮询定时器尤其要重来一遍：interval 的闭包里锁死了旧下标，删完再跑就会把结果写到别人头上。
+  async function deleteShot(idx: number) {
+    const shot = shots[idx];
+    if (!shot) return;
+    const t = tasks[idx];
+    const warn = t?.videoUrl ? '，已生成的分镜视频也会一起没掉' : '';
+    if (!window.confirm(`删除分镜${shot.shot_number}${warn}？删除后不可恢复。`)) return;
+    try {
+      if (shot.id) await api.del(`/shots/${shot.id}`);
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : '删除失败');
+      return;
+    }
+    // 旧的轮询全停掉，下面按新下标重建
+    Object.values(pollRefs.current).forEach(clearInterval);
+    pollRefs.current = {};
+
+    const shift = <T,>(m: Record<number, T>): Record<number, T> => {
+      const out: Record<number, T> = {};
+      for (const [k, v] of Object.entries(m)) {
+        const i = Number(k);
+        if (i === idx) continue;
+        out[i > idx ? i - 1 : i] = v;
+      }
+      return out;
+    };
+
+    const nextShots = shots.filter((_, i) => i !== idx).map((sh, i) => ({ ...sh, shot_number: i + 1 }));
+    setShots(nextShots);
+    setTasks(prev => {
+      const next = shift(prev);
+      for (const [k, v] of Object.entries(next)) {
+        const i = Number(k);
+        next[i] = { ...v, shotIndex: i };
+        if (v.taskId && !TERMINAL.has(v.status)) {
+          pollRefs.current[i] = setInterval(() => pollTaskById(i, v.taskId!), 10_000);
+        }
+      }
+      return next;
+    });
+    setShotTabs(prev => shift(prev));
+    setExpandedShots(prev => shift(prev));
+    setShotJsonEdits(prev => shift(prev));
+    setDirtyShotIdxs(prev => new Set([...prev].filter(i => i !== idx).map(i => (i > idx ? i - 1 : i))));
+    setActiveShot(a => Math.max(0, Math.min(a, nextShots.length - 1)));
+    setInitResult(prev => prev
+      ? { ...prev, shotCount: nextShots.length, totalVideoDuration: Math.max(0, prev.totalVideoDuration - shot.duration) }
+      : prev);
+  }
+
   async function saveAll() {
     setSavingShots(true);
     const promises: Promise<any>[] = [];
@@ -2107,6 +2318,35 @@ export default function VoiceoverPage() {
         setDialogueScript((err.data as any).script);
       }
     } finally { setAnalyzingScript(false); }
+  }
+
+  // 「重新分析角色」：拿页面上**已经有的那份对白剧本**重新提一遍角色，不重写剧本。
+  // 「剧本分析」是「写剧本 + 提角色」两件事一起做（Claude + DeepSeek），剧本手改过之后
+  // 再点它就会被整份覆盖掉；只想按现在这份剧本把角色重新提一遍时用这个，走 DeepSeek
+  // 那一步，几秒钟，剧本一个字都不动。
+  // 同名角色的头像/音色绑定原样保留 —— 重提一次就把绑好的脸和嗓子全丢了，比不提还糟。
+  async function handleExtractCharacters() {
+    const text = dialogueScript.trim();
+    if (!text || extractingRoles) return;
+    if (scriptAnalysis.length > 0 && !window.confirm('将按当前的对白剧本重新提取角色，现有角色卡会被替换（同名角色的头像和音色保留）。确定继续？')) return;
+    setExtractingRoles(true);
+    setScriptAnalysisError('');
+    try {
+      const d = await api.post<{ subjects?: AnalysisItem[] }>('/voiceover/extract-characters', { script: text });
+      const keep = new Map(scriptAnalysis.map(a => [a.label, a]));
+      const next = (d.subjects || []).map(sub => {
+        const old = keep.get(sub.label);
+        return { ...sub, linkedSubjectId: old?.linkedSubjectId, linkedAudioUrl: old?.linkedAudioUrl };
+      });
+      setScriptAnalysis(next);
+      // 角色没了的（这次没提到），它绑的主体也要从 video_subjects 里撤下来，
+      // 否则 @图片N 的编号里还占着一个位置
+      setVideoSubjects(next.filter(a => a.linkedSubjectId)
+        .map(a => projectSubjects.find(ps => ps.id === a.linkedSubjectId))
+        .filter(Boolean) as ProjectSubject[]);
+    } catch (err) {
+      setScriptAnalysisError(err instanceof Error ? err.message : '角色提取失败');
+    } finally { setExtractingRoles(false); }
   }
 
   // 轮询「AI改写」的流式任务，和 pollAnalyzeScriptJob 同一套路，只是结果写进
@@ -2858,7 +3098,7 @@ export default function VoiceoverPage() {
           {(videoDirty || dirtyShotIdxs.size > 0) && (
             <button type="button" onClick={saveAll} disabled={savingShots}
               style={{ flexShrink: 0, fontSize: 12, padding: '4px 12px', border: 'none', borderRadius: 6, background: '#2563eb', color: '#fff', cursor: 'pointer', fontWeight: 600 }}>
-              {savingShots ? '保存中…' : '保存'}
+              {savingShots ? '保存中…' : '保存草稿'}
             </button>
           )}
           <button type="button" onClick={() => setShowMobileParams(v => !v)}
@@ -3025,7 +3265,7 @@ export default function VoiceoverPage() {
                           value={dialogueScript}
                           onChange={e => setDialogueScript(e.target.value)}
                           readOnly={analyzingScript}
-                          rows={Math.min(16, Math.max(6, dialogueScript.split('\n').length))}
+                          rows={Math.min(10, Math.max(5, dialogueScript.split('\n').length))}
                           style={{ fontSize: 14, fontFamily: 'inherit', lineHeight: 1.8, background: analyzingScript ? '#faf5ff' : '#f9fafb', borderColor: '#000' }}
                           placeholder="对白剧本将显示在这里，可手动编辑…"
                         />
@@ -3038,9 +3278,22 @@ export default function VoiceoverPage() {
                   )}
 
                   {/* 剧本分析结果 */}
+                  {/* 有对白剧本就给一个「重新分析角色」——只按现在这份剧本重提角色，不重写剧本
+                      （「剧本分析」会连剧本一起重写，手改过的内容就没了） */}
+                  {scriptReady && !tabsCollapsed && stepTab === 'roles' && dialogueScript.trim() && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', margin: '0 0 10px' }}>
+                      <span style={{ fontSize: 11, color: '#9ca3af' }}>按当前对白剧本重新提取角色，不改剧本</span>
+                      <button type="button" onClick={handleExtractCharacters} disabled={extractingRoles || analyzingScript}
+                        style={{ fontSize: 11, padding: '4px 10px', border: '1px solid #7c3aed', borderRadius: 4, background: extractingRoles ? '#f5f3ff' : '#fff', color: '#7c3aed', cursor: extractingRoles || analyzingScript ? 'default' : 'pointer', fontWeight: 600 }}>
+                        {extractingRoles ? '提取中…' : '重新分析角色'}
+                      </button>
+                    </div>
+                  )}
                   {scriptReady && !tabsCollapsed && stepTab === 'roles' && scriptAnalysis.length === 0 && (
                     <p style={{ margin: '0 0 14px', fontSize: 12, color: '#9ca3af' }}>
-                      还没有角色，点上面的「剧本分析」从剧本里提取。
+                      {dialogueScript.trim()
+                        ? '还没有角色，点上面的「重新分析角色」从这份对白剧本里提取。'
+                        : '还没有角色，点上面的「剧本分析」从剧本里提取。'}
                     </p>
                   )}
                   {scriptReady && !tabsCollapsed && stepTab === 'roles' && scriptAnalysis.length > 0 && (() => {
@@ -3066,12 +3319,20 @@ export default function VoiceoverPage() {
                                 const linked = projectSubjects.find(ps => ps.id === item.linkedSubjectId);
                                 const imgNum = analysisImgNum[idx];
                                 return linked ? (
-                                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#16a34a', background: '#f0fdf4', padding: '2px 6px', borderRadius: 4 }}>
-                                    {linked.image_url && <img src={linked.image_url} alt="" style={{ width: 36, height: 36, borderRadius: 4, objectFit: 'cover' }} />}
-                                    <span style={{ display: 'flex', flexDirection: 'column' }}>
-                                      {displayLabel(linked.label) && <span>{displayLabel(linked.label)}</span>}
-                                      {imgNum > 0 && <span style={{ fontSize: 10, color: '#9ca3af' }}>图片{imgNum}</span>}
-                                    </span>
+                                  <span style={{ display: 'inline-flex', alignItems: 'flex-start', gap: 6, fontSize: 11, color: '#16a34a', background: '#f0fdf4', padding: '2px 6px', borderRadius: 4 }}>
+                                    {/* 「图片N」压在缩略图正下方 —— 这个编号指的就是这张图，
+                                        贴着图看才对得上（挂右边一列容易和角色名混作一团） */}
+                                    {linked.image_url && (
+                                      <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
+                                        <img src={linked.image_url} alt="" style={{ width: 36, height: 36, borderRadius: 4, objectFit: 'cover' }} />
+                                        {imgNum > 0 && <span style={{ fontSize: 10, color: '#9ca3af', lineHeight: 1.2 }}>图片{imgNum}</span>}
+                                      </span>
+                                    )}
+                                    {/* 有头像就只留缩略图 + 图片N —— 主体名多半是资源名，占地方又不说明问题，
+                                        要核对的是「这张脸是第几张图」。没绑图的才退回显示名字，不然标签是空的 */}
+                                    {!linked.image_url && displayLabel(linked.label) && (
+                                      <span>{displayLabel(linked.label)}</span>
+                                    )}
                                     <button type="button" onClick={() => { const newA = scriptAnalysis.map((s, i) => i === idx ? { ...s, linkedSubjectId: undefined } : s); setScriptAnalysis(newA); setVideoSubjects(newA.filter(a => a.linkedSubjectId).map(a => projectSubjects.find(ps => ps.id === a.linkedSubjectId)).filter(Boolean) as ProjectSubject[]); }}
                                       style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: 12, padding: 0, lineHeight: 1 }}>×</button>
                                   </span>
@@ -3083,14 +3344,17 @@ export default function VoiceoverPage() {
                                 const media = audioItems[an];
                                 const avatar = presetThumbByUrl.get(item.linkedAudioUrl);
                                 return (
-                                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#0e7490', background: '#ecfeff', padding: '2px 6px', borderRadius: 4 }}>
-                                    {avatar
-                                      ? <img src={avatar} alt="" style={{ width: 28, height: 28, borderRadius: '50%', objectFit: 'cover' }} />
-                                      : <span style={{ width: 28, height: 28, borderRadius: '50%', background: '#cffafe', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13 }}>🎵</span>}
-                                    <span>音频{an + 1}</span>
-                                    <button type="button" title="试听"
+                                  <span style={{ display: 'inline-flex', alignItems: 'flex-start', gap: 6, fontSize: 11, color: '#0e7490', background: '#ecfeff', padding: '2px 6px', borderRadius: 4 }}>
+                                    {/* 「音频N」压在音色头像正下方，和上面「图片N」同一个排法。
+                                        试听没有单独的 ▶ 按钮 —— 点头像/编号本身就是试听 */}
+                                    <span role="button" title="点击试听"
                                       onClick={() => { previewAudioRef.current?.pause(); const a = new Audio(media.url!); previewAudioRef.current = a; a.play().catch(() => {}); }}
-                                      style={{ background: 'none', border: 'none', color: '#0891b2', cursor: 'pointer', fontSize: 12, padding: 0, lineHeight: 1 }}>▶</button>
+                                      style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1, cursor: 'pointer' }}>
+                                      {avatar
+                                        ? <img src={avatar} alt="" style={{ width: 28, height: 28, borderRadius: '50%', objectFit: 'cover' }} />
+                                        : <span style={{ width: 28, height: 28, borderRadius: '50%', background: '#cffafe', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13 }}>🎵</span>}
+                                      <span style={{ lineHeight: 1.2 }}>音频{an + 1}</span>
+                                    </span>
                                     <button type="button" onClick={() => unbindVoice(idx)}
                                       style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: 12, padding: 0, lineHeight: 1 }}>×</button>
                                   </span>
@@ -3104,7 +3368,7 @@ export default function VoiceoverPage() {
                                   <span style={{ position: 'relative' }}>
                                     <button type="button" onClick={() => setScriptAnalysis(prev => prev.map((s, i) => i === idx ? { ...s, _voicePickerOpen: !s._voicePickerOpen } : { ...s, _voicePickerOpen: false }))}
                                       style={{ fontSize: 11, padding: '3px 8px', border: '1px solid #0891b2', borderRadius: 4, background: item.linkedAudioUrl ? '#ecfeff' : '#fff', color: '#0891b2', cursor: 'pointer' }}>
-                                      换音色
+                                      音色
                                     </button>
                                     {item._voicePickerOpen && (
                                       <div style={{ position: 'absolute', right: 0, top: '100%', marginTop: 4, padding: 8, border: '1px solid #e5e7eb', borderRadius: 6, background: '#fff', zIndex: 50, boxShadow: '0 4px 12px rgba(0,0,0,0.1)', minWidth: 180 }}>
@@ -3151,7 +3415,7 @@ export default function VoiceoverPage() {
                                 )}
                                 <button type="button" onClick={() => { setAvatarPickerIdx(idx); setAvatarPickerTab('real'); setAvatarSearch(''); }}
                                   style={{ fontSize: 11, padding: '3px 8px', border: '1px solid #7c3aed', borderRadius: 4, background: '#fff', color: '#7c3aed', cursor: 'pointer' }}>
-                                  换头像
+                                  头像
                                 </button>
                                 <button type="button" onClick={() => {
                                   const droppedAudio = scriptAnalysis[idx]?.linkedAudioUrl;
@@ -3164,11 +3428,11 @@ export default function VoiceoverPage() {
                               </span>
                             </div>
                             {/* 形象/性格都可改。**形象这段会被逐镜一字不改地贴进每个分镜的
-                                prompt_en**（角色定义原文锁），所以改这里等于改全片的长相；
-                                性格只用于这张卡的展示，不进提示词 */}
+                                prompt_en**（角色定义原文锁），落点就是提示词页签里的「角色定义」那一段，
+                                所以改这里等于改全片的长相；性格只用于这张卡的展示，不进提示词 */}
                             <label style={{ display: 'block', fontSize: 12, color: '#374151', marginBottom: 4 }}>
                               <b>形象</b>
-                              <span style={{ fontSize: 10, color: '#9ca3af', marginLeft: 4 }}>每一镜都会原样写进提示词</span>
+                              <span style={{ fontSize: 10, color: '#9ca3af', marginLeft: 4 }}>= 每一镜提示词里的「角色定义」，原样写入</span>
                               <textarea value={item.appearance || ''} rows={3}
                                 onChange={e => patchAnalysis(idx, { appearance: e.target.value })}
                                 className={styles.textarea} style={{ fontSize: 12, lineHeight: 1.6, marginTop: 2 }} />
@@ -3259,7 +3523,9 @@ export default function VoiceoverPage() {
               </div>
 
               {/* ── Step 2 ── */}
-              {initResult && shots.length > 0 && (
+              {initResult && shots.length > 0 && (() => {
+                const activeIdx = Math.min(activeShot, shots.length - 1);
+                return (
                 <div style={{ marginBottom: 16 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 0', flexWrap: 'wrap' }}>
                     {/* 点这一行折叠整个分镜列表（合并那块不跟着收） */}
@@ -3272,42 +3538,95 @@ export default function VoiceoverPage() {
                     </span>
                     {/* 时长和已生成连成一句，中间只有一个逗号，不留间距 */}
                     <span style={{ fontSize: 13, color: '#16a34a' }}>
-                      视频{Math.round(shots.reduce((a, s) => a + s.duration, 0))}秒{audioDuration > 0 ? ` · 音频${Math.round(audioDuration)}秒` : ''}
+                      视频总时长{Math.round(shots.reduce((a, s) => a + s.duration, 0))}秒{audioDuration > 0 ? ` · 音频${Math.round(audioDuration)}秒` : ''}
                       {succeededCount > 0 && <>,已生成{succeededCount}/{shots.length}个</>}
                     </span>
                     {ttsLoading && <span style={{ fontSize: 12, color: '#2563eb' }}>语音生成中…</span>}
-                    <button type="button" onClick={() => {
-                      const next = !allShotsExpanded;
-                      setAllShotsExpanded(next);
-                      const map: Record<number, boolean> = {};
-                      shots.forEach((_, i) => { map[i] = next; });
-                      setExpandedShots(map);
-                    }}
-                      style={{ marginLeft: 'auto', fontSize: 11, padding: '3px 10px', border: '1px solid #f59e0b', borderRadius: 5, background: '#f59e0b', cursor: 'pointer', color: '#fff', fontWeight: 600 }}>
-                      {allShotsExpanded ? '全部折叠' : '全部展开'}
-                    </button>
+                    {/* 横排标签 ⇄ 竖排列表。竖排下才有「全部展开/折叠」——横排一次只显示一镜，
+                        展开与否没有意义 */}
+                    <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                      {shotView === 'list' && (
+                        <button type="button" onClick={() => {
+                          const next = !allShotsExpanded;
+                          setAllShotsExpanded(next);
+                          const map: Record<number, boolean> = {};
+                          shots.forEach((_, i) => { map[i] = next; });
+                          setExpandedShots(map);
+                        }}
+                          style={{ fontSize: 11, padding: '3px 10px', border: '1px solid #f59e0b', borderRadius: 4, background: '#f59e0b', cursor: 'pointer', color: '#fff', fontWeight: 600 }}>
+                          {allShotsExpanded ? '全部折叠' : '全部展开'}
+                        </button>
+                      )}
+                      <button type="button"
+                        onClick={() => {
+                          const next = shotView === 'tabs' ? 'list' : 'tabs';
+                          setShotView(next);
+                          try { localStorage.setItem(SHOT_VIEW_KEY, next); } catch {}
+                        }}
+                        title={shotView === 'tabs' ? '切换成竖排列表' : '切换成横排标签'}
+                        style={{ fontSize: 11, padding: '3px 10px', border: '1px solid #6b7280', borderRadius: 4, background: '#fff', color: '#374151', cursor: 'pointer' }}>
+                        {shotView === 'tabs' ? '竖排' : '横排'}
+                      </button>
+                    </span>
                   </div>
+
+                  {/* 分镜标签条：横着排一排，点哪个下面就显示哪一镜。
+                      小圆点是这一镜的生成状态（绿=已生成 / 红=失败 / 黄=排队生成中 / 灰=还没提交），
+                      不用逐个点开就知道哪几镜还没好。一行放不下就换行，不横向滚动 ——
+                      分镜多的时候滚动条会把后面几镜藏起来，换行至少一眼全看得见 */}
+                  {!shotsCollapsed && shotView === 'tabs' && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, padding: '0 0 10px' }}>
+                      {/* 标签上只有编号 —— 上一行「N个分镜」已经说明这是什么，
+                          再写一遍「分镜」只是占地方 */}
+                      {shots.map((s, i) => {
+                        const st = tasks[i]?.status;
+                        const dot = st === 'succeeded' ? '#16a34a'
+                          : st === 'failed' ? '#dc2626'
+                          : st && !TERMINAL.has(st) ? '#f59e0b' : '#d1d5db';
+                        const on = i === activeIdx;
+                        return (
+                          <button key={i} type="button" onClick={() => setActiveShot(i)}
+                            style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap',
+                              fontSize: 12, fontWeight: on ? 700 : 500, padding: '5px 10px', borderRadius: 4, cursor: 'pointer',
+                              border: on ? '2px solid #2563eb' : '1px solid #e5e7eb',
+                              background: on ? '#eff6ff' : '#fff', color: on ? '#1d4ed8' : '#374151' }}>
+                            <span style={{ width: 6, height: 6, borderRadius: '50%', background: dot, flexShrink: 0 }} />
+                            {s.shot_number}
+                          </button>
+                        );
+                      })}
+                      {/* 最后一镜后面的「+」：在末尾补一个空分镜，加完直接选中它 */}
+                      <button type="button" onClick={addShot} disabled={addingShot} title="在最后加一个分镜"
+                        style={{ flexShrink: 0, fontSize: 13, fontWeight: 700, lineHeight: 1, padding: '5px 10px', borderRadius: 4,
+                          border: '1px dashed #9ca3af', background: '#fff', color: '#6b7280',
+                          cursor: addingShot ? 'default' : 'pointer' }}>
+                        {addingShot ? '…' : '+'}
+                      </button>
+                    </div>
+                  )}
 
                   <div style={{ padding: '0 0 16px' }}>
                     {!shotsCollapsed && (<>
                     {shots.map((shot, idx) => {
+                      // 横排：只渲染标签条选中的那一镜，且永远是展开态
+                      // 竖排：全部铺开，每张卡各自展开/折叠（点卡头收起）
+                      const tabsView = shotView === 'tabs';
+                      if (tabsView && idx !== activeIdx) return null;
                       const task = tasks[idx];
-                      const isExpanded = expandedShots[idx] ?? false;
-                      const shotTab: ShotTabKey = shotTabs[idx] ?? 'prompt';
+                      const isExpanded = tabsView || (expandedShots[idx] ?? false);
+                      const shotTab: ShotTabKey = shotTabs[idx] ?? 'subtitle';
                       return (
                         <Fragment key={idx}>
                           {!isExpanded ? (
-                            /* ── Collapsed: compact list row ── */
+                            /* ── 竖排下的收起行：分镜N + 标题 + 一句话描述 + 状态 ── */
                             <div className={styles.shotCard} style={{ padding: '8px 12px', marginTop: idx === 0 ? 12 : undefined, cursor: 'pointer' }}
                               onClick={() => setExpandedShots(prev => ({ ...prev, [idx]: true }))}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                                 {shot.imageUrl && <img src={shot.imageUrl} alt="" style={{ width: 28, height: 28, borderRadius: 4, objectFit: 'cover', flexShrink: 0 }} />}
                                 <span className={styles.shotNum} style={{ flexShrink: 0 }}>分镜{shot.shot_number}</span>
-                                {/* 标签挪走之后这一行宽松了，标题不用再挤在 120px 里 */}
                                 <span style={{ fontSize: 12, fontWeight: 600, color: '#374151', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 260 }}>
                                   {shot.title}
                                 </span>
-                                {/* 时长：收起状态也要看得见，排分镜节奏时不用一个个展开 */}
                                 {shot.duration ? (
                                   <span style={{ flexShrink: 0, fontSize: 11, fontWeight: 600, color: '#0f766e', background: '#f0fdfa', border: '1px solid #99f6e4', borderRadius: 999, padding: '1px 7px', whiteSpace: 'nowrap' }}>
                                     {shot.duration}s
@@ -3320,17 +3639,23 @@ export default function VoiceoverPage() {
                                   style={{ width: 14, height: 14, color: '#9ca3af', flexShrink: 0 }}>
                                   <path d="m6 9 6 6 6-6"/>
                                 </svg>
-                                {/* 收起状态只留「分镜N + 标题 + 一句话描述」——景别/AB-roll/氛围/运镜/时长
-                                    那排标签挪到展开后的「参数」页签（模型给的英文光线描述能把这一行撑得很长） */}
                                 {shot.description && <p className={styles.shotDescRow}>{shot.description}</p>}
                               </div>
                             </div>
                           ) : (
-                            /* ── Expanded: full editor ── */
-                          <div className={styles.shotCard} style={idx === 0 ? { marginTop: 12 } : undefined}>
-                            <div className={styles.shotHead} style={{ cursor: 'pointer' }} onClick={() => setExpandedShots(prev => ({ ...prev, [idx]: false }))}>
+                          <div className={styles.shotCard} style={{ marginTop: 12 }}>
+                            {/* 竖排下点卡头收起这一镜；横排下一次只显示一镜，收起没有意义 */}
+                            <div className={styles.shotHead}
+                              style={tabsView ? undefined : { cursor: 'pointer' }}
+                              onClick={tabsView ? undefined : () => setExpandedShots(prev => ({ ...prev, [idx]: false }))}>
                               <div className={styles.shotInfo}>
                                 <span className={styles.shotNum}>分镜{shot.shot_number}</span>
+                                {/* 时长紧跟在「分镜N」后面：放在标题之后会被长标题挤到看不见 */}
+                                {shot.duration ? (
+                                  <span style={{ flexShrink: 0, alignSelf: 'center', fontSize: 12, fontWeight: 700, color: '#0f766e', background: '#f0fdfa', border: '1px solid #5eead4', borderRadius: 999, padding: '2px 9px', whiteSpace: 'nowrap' }}>
+                                    {shot.duration}s
+                                  </span>
+                                ) : null}
                                 <div className={styles.shotMeta}>
                                   <p className={styles.shotTitle}>{shot.title}</p>
                                 </div>
@@ -3347,10 +3672,23 @@ export default function VoiceoverPage() {
                                   {task?.submitting ? '提交中…' : (task?.taskId && !TERMINAL.has(task.status)) ? '生成中' : task?.status === 'succeeded' ? '重新生成' : `生成视频${idx + 1}`}
                                 </button>
                               </span>
-                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-                                style={{ width: 14, height: 14, color: '#9ca3af', flexShrink: 0, transform: 'rotate(180deg)' }}>
-                                <path d="m6 9 6 6 6-6"/>
-                              </svg>
+                              {/* 横排下卡头右上角是删除这一镜；竖排下那个位置是收起箭头
+                                  （竖排整行就是折叠的点击区，塞个删除按钮容易点错） */}
+                              {tabsView ? (
+                                <button type="button" title={`删除分镜${shot.shot_number}`}
+                                  onClick={e => { e.stopPropagation(); deleteShot(idx); }}
+                                  style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 3, border: 'none', background: 'none', color: '#9ca3af', cursor: 'pointer' }}>
+                                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"
+                                    style={{ width: 15, height: 15 }}>
+                                    <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"/>
+                                  </svg>
+                                </button>
+                              ) : (
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+                                  style={{ width: 14, height: 14, color: '#9ca3af', flexShrink: 0, transform: 'rotate(180deg)' }}>
+                                  <path d="m6 9 6 6 6-6"/>
+                                </svg>
+                              )}
                               {/* 一句话描述独占一行：.shotHead 是 flex-wrap，给它 100% 宽就换到下一行，
                                   不再和标题挤在按钮左边那点宽度里（仍在收起卡片的点击区内） */}
                               {shot.description && <p className={styles.shotDescRow}>{shot.description}</p>}
@@ -3366,8 +3704,6 @@ export default function VoiceoverPage() {
                                   {label}
                                   {/* 手改过 JSON 的分镜按编辑后的发送，页签上标一下，免得忘了还挂着改动 */}
                                   {k === 'json' && shotJsonEdits[idx] !== undefined && <span className={styles.shotTabDot}>已改</span>}
-                                  {/* 片子出来了就在「预览」上点一下 —— 视频进了页签，停在别的页签会看不见 */}
-                                  {k === 'preview' && task?.videoUrl && <span className={styles.shotTabOk}>▶</span>}
                                 </button>
                               ))}
                             </div>
@@ -3378,26 +3714,11 @@ export default function VoiceoverPage() {
                             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
                               <ShotChips shot={shot} />
                             </div>
-                            {/* Shot reference image */}
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '8px 0' }}>
-                              {shot.imageUrl ? (
-                                <div style={{ position: 'relative' }}>
-                                  <img src={shot.imageUrl} alt="" style={{ width: 80, height: 80, borderRadius: 6, objectFit: 'cover', border: '1px solid #e5e7eb' }} />
-                                  <button onClick={() => { const u = [...shots]; u[idx] = { ...u[idx], imageUrl: '' }; setShots(u); if (u[idx].id) api.put(`/shots/${u[idx].id}`, { image_url: '' }).catch(() => {}); }}
-                                    style={{ position: 'absolute', top: -4, right: -4, width: 16, height: 16, borderRadius: '50%', background: 'rgba(0,0,0,0.6)', color: '#fff', border: 'none', fontSize: 10, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>×</button>
-                                </div>
-                              ) : null}
-                              <button onClick={() => openShotAi(idx)}
-                                style={{ padding: '4px 10px', fontSize: 11, border: '1px solid #2563eb', borderRadius: 5, background: '#eff6ff', color: '#2563eb', cursor: 'pointer' }}>
-                                {shot.imageUrl ? '重新生成' : 'AI生成参考图'}
-                              </button>
-                            </div>
-
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(90px, 1fr))', gap: '4px 8px', margin: '8px 0', alignItems: 'end' }}>
                               <div>
                                 <span className={styles.paramLabel}>景别</span>
                                 <select value={shot.shot_size || ''} onChange={e => { const u = [...shots]; u[idx] = { ...u[idx], shot_size: e.target.value }; setShots(u); markShotDirty(idx); }}
-                                  className={styles.select} style={{ width: '100%', marginTop: 2 }}>
+                                  className={styles.paramCtl}>
                                   <option value="">--</option>
                                   {SHOT_SIZES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
                                   {/* 归一化没认出来的值也得能显示，否则 select 是空白，看着像丢了数据 */}
@@ -3408,12 +3729,12 @@ export default function VoiceoverPage() {
                               <div>
                                 <span className={styles.paramLabel}>光影氛围</span>
                                 <input type="text" value={shot.mood || ''} onChange={e => { const u = [...shots]; u[idx] = { ...u[idx], mood: e.target.value }; setShots(u); markShotDirty(idx); }}
-                                  className={styles.input} style={{ width: '100%', padding: '3px 6px', fontSize: 11, marginTop: 2 }} placeholder="氛围" />
+                                  className={styles.paramCtl} placeholder="氛围" />
                               </div>
                               <div>
                                 <span className={styles.paramLabel}>运镜</span>
                                 <select value={shot.camera_movement || ''} onChange={e => { const u = [...shots]; u[idx] = { ...u[idx], camera_movement: e.target.value }; setShots(u); markShotDirty(idx); }}
-                                  className={styles.select} style={{ width: '100%', marginTop: 2 }}>
+                                  className={styles.paramCtl}>
                                   <option value="">--</option>
                                   {CAMERA_MOVEMENTS.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
                                   {shot.camera_movement && !CAMERA_MOVEMENTS.some(o => o.value === shot.camera_movement) &&
@@ -3422,49 +3743,140 @@ export default function VoiceoverPage() {
                               </div>
                               <div>
                                 <span className={styles.paramLabel}>时长</span>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 2, marginTop: 2 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
                                   <input type="number" min={4} max={15} step={1} value={shot.duration}
                                     onChange={e => { const u = [...shots]; u[idx] = { ...u[idx], duration: Math.max(4, Math.min(15, Number(e.target.value) || 5)) }; setShots(u); markShotDirty(idx); }}
-                                    className={styles.input} style={{ width: '100%', padding: '3px 6px', fontSize: 11 }} />
-                                  <span style={{ fontSize: 11, color: '#6b7280' }}>s</span>
+                                    className={styles.paramCtl} />
+                                  <span style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>s</span>
                                 </div>
                               </div>
                               <div>
                                 <span className={styles.paramLabel}>主体</span>
                                 <input type="text" value={(shot.subjects || []).join(', ')}
                                   onChange={e => { const u = [...shots]; u[idx] = { ...u[idx], subjects: e.target.value.split(/[,，]/).map(s => s.trim()).filter(Boolean) }; setShots(u); markShotDirty(idx); }}
-                                  className={styles.input} style={{ width: '100%', padding: '3px 6px', fontSize: 11, marginTop: 2 }} placeholder="逗号分隔" />
+                                  className={styles.paramCtl} placeholder="逗号分隔" />
                               </div>
                               <div>
                                 <span className={styles.paramLabel}>3D机位</span>
                                 <button type="button" onClick={() => setCameraEditorIdx(idx)}
-                                  style={{ width: '100%', marginTop: 2, padding: '3px 6px', fontSize: 11, borderRadius: 4, border: '1px solid #2563eb', background: shot.camera ? '#eff6ff' : '#fff', color: '#2563eb', cursor: 'pointer', fontWeight: 500 }}>
+                                  className={styles.paramCtl}
+                                  style={{ borderColor: '#2563eb', background: shot.camera ? '#eff6ff' : '#fff', color: '#2563eb' }}>
                                   {shot.camera ? '编辑' : '设置'}
                                 </button>
                               </div>
-                              <div>
-                                <span className={styles.paramLabel}>素材</span>
-                                <button type="button" onClick={() => setShotMediaIdx(idx)}
-                                  style={{ width: '100%', marginTop: 2, padding: '3px 6px', fontSize: 11, borderRadius: 4, border: '1px solid #6b7280', background: (shot.reference_images?.length) ? '#f0fdf4' : '#fff', color: '#374151', cursor: 'pointer', fontWeight: 500 }}>
-                                  {shot.reference_images?.length ? `${shot.reference_images.length}张` : '添加'}
-                                </button>
-                              </div>
                             </div>
+
                             </>)}
 
-                            {shotTab === 'prompt' && (
-                            <div style={{ marginBottom: 8 }}>
-                              <span className={styles.fieldLabel}>分镜{idx + 1}场景描述（可编辑）</span>
-                              <textarea rows={10} value={shot.prompt}
-                                onChange={e => { const u = [...shots]; u[idx] = { ...u[idx], prompt: e.target.value }; setShots(u); markShotDirty(idx); }}
-                                className={styles.textarea} />
+                            {/* 参考图页签：分镜参考图（AI 生成的那一张）+ 分镜附加素材。
+                                两者都是「喂给这一镜的图」，放一起才好比对；参数页签只管文字参数 */}
+                            {shotTab === 'refs' && (
+                            <div style={{ margin: '8px 0' }}>
+                              <span className={styles.fieldLabel}>分镜参考图</span>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '4px 0 12px' }}>
+                                {shot.imageUrl ? (
+                                  <div style={{ position: 'relative' }}>
+                                    <img src={shot.imageUrl} alt="" style={{ width: 80, height: 80, borderRadius: 6, objectFit: 'cover', border: '1px solid #e5e7eb' }} />
+                                    <button onClick={() => { const u = [...shots]; u[idx] = { ...u[idx], imageUrl: '' }; setShots(u); if (u[idx].id) api.put(`/shots/${u[idx].id}`, { image_url: '' }).catch(() => {}); }}
+                                      style={{ position: 'absolute', top: -4, right: -4, width: 16, height: 16, borderRadius: '50%', background: 'rgba(0,0,0,0.6)', color: '#fff', border: 'none', fontSize: 10, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>×</button>
+                                  </div>
+                                ) : null}
+                                <button onClick={() => openShotAi(idx)}
+                                  style={{ padding: '4px 10px', fontSize: 11, border: '1px solid #2563eb', borderRadius: 5, background: '#eff6ff', color: '#2563eb', cursor: 'pointer' }}>
+                                  {shot.imageUrl ? '重新生成' : '分镜参考图'}
+                                </button>
+                              </div>
+
+                              <span className={styles.fieldLabel}>分镜附加素材</span>
+                              <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6, margin: '4px 0 0' }}>
+                                <button type="button" onClick={() => setShotMediaIdx(idx)}
+                                  className={styles.paramCtl}
+                                  style={{ width: 'auto', marginTop: 0, flexShrink: 0, borderColor: '#9ca3af', background: (shot.reference_images?.length) ? '#f0fdf4' : '#fff' }}>
+                                  {shot.reference_images?.length ? `${shot.reference_images.length}张` : '添加'}
+                                </button>
+                                {(shot.reference_images || []).map((r, ri) => (
+                                  <img key={ri} src={r.url} alt="" title={r.name || ''}
+                                    onClick={() => setShotMediaIdx(idx)}
+                                    style={{ width: 40, height: 40, borderRadius: 5, objectFit: 'cover', border: '1px solid #e5e7eb', cursor: 'pointer' }} />
+                                ))}
+                              </div>
                             </div>
                             )}
+
+                            {/* 提示词按来源拆成四段显示（见 splitShotPrompt）——只是显示上的拆分，
+                                提交时仍旧 join 回同一条 prompt 塞进 JSON 的 text 里。
+                                拆开是为了让「后端逐镜统一贴的角色定义句」和「真正属于这一镜的画面描述」
+                                各归各位：定义句全片一字不差，混在一起看不出哪段该改。 */}
+                            {shotTab === 'prompt' && (() => {
+                              const parts = splitShotPrompt(shot.prompt);
+                              const anchorOptions = subjectAnchorOptions(subjectContext.characterDefs);
+                              const setPart = (key: keyof typeof parts, value: string) => {
+                                const u = [...shots];
+                                u[idx] = { ...u[idx], prompt: joinShotPrompt({ ...parts, [key]: value }) };
+                                setShots(u); markShotDirty(idx);
+                              };
+                              const hint = { fontSize: 10, color: '#9ca3af', margin: '0 0 2px', lineHeight: 1.5 } as const;
+                              const sections: Array<{ key: keyof typeof parts; label: string; tip: string; ph: string }> = [
+                                { key: 'head',   label: '开场声明', tip: '格式与风格声明，质量杠杆最大的一句', ph: '例：One continuous shot, no cuts, photorealistic, 35mm film grain.' },
+                                { key: 'defs',   label: '角色定义', tip: '', ph: '这一镜没有绑定角色' },
+                                { key: 'body',   label: '画面描述', tip: '场景/动作/时间轴节拍 —— 真正属于这一镜的部分，改这里最有效', ph: '' },
+                                { key: 'speech', label: '台词', tip: '对白/画外音块，提交时会按「字幕」页签的内容重建', ph: '这一镜没有台词' },
+                              ];
+                              return (
+                                <div style={{ marginBottom: 8 }}>
+                                  <span className={styles.fieldLabel}>分镜{idx + 1}提示词（分段可编辑，提交时合并为一条）</span>
+                                  {sections.map(sec => (
+                                    <div key={sec.key} style={{ marginTop: 8 }}>
+                                      <span className={styles.fieldLabel} style={{ margin: 0 }}>{sec.label}</span>
+                                      {/* 「选取角色」：从角色区那几个角色里挑这一镜出场的，按固定句式插进来。
+                                          选中的角色 = 定义段里出现过的 <主体N>，点一下加、再点一下去掉，
+                                          句子由 subjectAnchorOptions 拼（和后端原文锁逐字同一个句式） */}
+                                      {sec.key === 'defs' && anchorOptions.length > 0 && (() => {
+                                        const picked = new Set(
+                                          [...parts.defs.matchAll(/[<【]\s*主体\s*(\d+)\s*[>】]/g)].map(m => Number(m[1]))
+                                        );
+                                        const rebuild = (nums: Set<number>) =>
+                                          setPart('defs', anchorOptions.filter(o => nums.has(o.num)).map(o => o.anchor).join('；'));
+                                        return (
+                                          <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap', margin: '4px 0 2px' }}>
+                                            <span style={{ fontSize: 10, color: '#9ca3af' }}>选取角色</span>
+                                            {anchorOptions.map(o => {
+                                              const on = picked.has(o.num);
+                                              return (
+                                                <button key={o.num} type="button"
+                                                  title={on ? `从这一镜的角色定义里去掉「${o.name}」` : `把「${o.name}」的定义句插进这一镜`}
+                                                  onClick={() => {
+                                                    const next = new Set(picked);
+                                                    if (on) next.delete(o.num); else next.add(o.num);
+                                                    rebuild(next);
+                                                  }}
+                                                  style={{ fontSize: 10, padding: '1px 7px', borderRadius: 4, cursor: 'pointer',
+                                                    border: on ? '1px solid #16a34a' : '1px solid #d1d5db',
+                                                    background: on ? '#f0fdf4' : '#fff', color: on ? '#15803d' : '#6b7280' }}>
+                                                  {on ? '✓ ' : ''}{o.name || `图片${o.num}`}
+                                                </button>
+                                              );
+                                            })}
+                                          </div>
+                                        );
+                                      })()}
+                                      {sec.tip ? <p style={hint}>{sec.tip}</p> : null}
+                                      <AutoTextarea placeholder={sec.ph}
+                                        value={parts[sec.key]}
+                                        onChange={e => setPart(sec.key, e.target.value)}
+                                        className={styles.textarea} />
+                                    </div>
+                                  ))}
+                                </div>
+                              );
+                            })()}
 
                             {shotTab === 'subtitle' && (
                             <div style={{ marginBottom: 8 }}>
                               <span className={styles.fieldLabel}>分镜{idx + 1}字幕</span>
-                              <textarea rows={4} value={shot.subtitle}
+                              {/* 行数随内容走：一句话的字幕不该占四行，长的也不用在小框里滚 */}
+                              <textarea rows={Math.min(8, Math.max(2, shot.subtitle ? shot.subtitle.split('\n').length + Math.floor(shot.subtitle.length / 28) : 2))}
+                                value={shot.subtitle}
                                 onChange={e => { const u = [...shots]; u[idx] = { ...u[idx], subtitle: e.target.value }; setShots(u); markShotDirty(idx); }}
                                 className={styles.textarea} />
                             </div>
@@ -3543,6 +3955,16 @@ export default function VoiceoverPage() {
                       );
                     })}
 
+                    {/* 竖排下没有标签条，加号就摆在最后一张卡后面 */}
+                    {shotView === 'list' && (
+                      <button type="button" onClick={addShot} disabled={addingShot}
+                        style={{ display: 'block', width: '100%', marginTop: 12, padding: '8px 0', fontSize: 12, fontWeight: 600,
+                          border: '1px dashed #9ca3af', borderRadius: 6, background: '#fff', color: '#6b7280',
+                          cursor: addingShot ? 'default' : 'pointer' }}>
+                        {addingShot ? '添加中…' : '+ 添加分镜'}
+                      </button>
+                    )}
+
                     <div className={styles.shotListActions} style={{ marginTop: 12, marginBottom: 12, justifyContent: 'center' }}>
                       <button type="button" onClick={submitAllShots}
                         disabled={succeededCount === shots.length}
@@ -3597,7 +4019,8 @@ export default function VoiceoverPage() {
                     )}
                   </div>
                 </div>
-              )}
+                );
+              })()}
             </div>
 
           </div>
@@ -3800,56 +4223,72 @@ export default function VoiceoverPage() {
       {/* AI改写对白剧本浮窗：上半是当前剧本（改写中切成流式预览），下半是改写要求输入框。
           流式预览没被采用之前不覆盖正文，避免改写跑偏还是把原稿搭进去。 */}
       {rewriteOpen && typeof document !== 'undefined' && createPortal(
-        <div onClick={closeRewriteModal} className={styles.libOverlay}>
-          <div onClick={e => e.stopPropagation()} className={styles.libSheet} style={{ width: 'min(640px, 96vw)' }}>
-            <div className={styles.libHeader}>
-              <strong style={{ fontSize: 14 }} className={styles.libTitle}>AI改写对白剧本</strong>
+        <div onClick={closeRewriteModal} className={styles.rwOverlay}>
+          <div onClick={e => e.stopPropagation()} className={styles.rwSheet}>
+            <div className={styles.rwHead}>
+              <span className={styles.rwIcon}>✎</span>
+              <div style={{ minWidth: 0 }}>
+                <div className={styles.rwTitle}>AI 改写对白剧本</div>
+                <div className={styles.rwSub}>说清要改什么，结果先预览，采用后才写回正文</div>
+              </div>
               <button type="button" onClick={closeRewriteModal} disabled={rewritingScript}
-                style={{ background: 'none', border: 'none', fontSize: 20, color: rewritingScript ? '#e5e7eb' : '#9ca3af', cursor: rewritingScript ? 'not-allowed' : 'pointer', lineHeight: 1, padding: '0 4px' }}>×</button>
+                className={styles.rwClose} title="关闭">×</button>
             </div>
 
-            <div className={styles.libBody} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div className={styles.rwBody}>
               <div>
-                <p style={{ fontSize: 12, color: '#6b7280', margin: '0 0 4px' }}>
-                  {rewritingScript ? '正在按要求改写…' : (rewritePreview ? '改写结果（未采用前不影响正文）' : '当前对白剧本')}
+                <p className={styles.rwLabel}>
+                  {rewritingScript ? '正在按要求改写…' : (rewritePreview ? '改写结果' : '当前对白剧本')}
+                  {rewritePreview && !rewritingScript && <span className={styles.rwLabelTag}>未采用</span>}
                 </p>
                 <textarea
                   ref={rewritePreviewBoxRef}
                   readOnly
                   value={rewritingScript || rewritePreview ? rewritePreview : dialogueScript}
                   rows={12}
-                  className={styles.textarea}
-                  style={{ fontSize: 12, fontFamily: 'inherit', lineHeight: 1.7, background: '#f9fafb' }}
+                  className={styles.rwDoc}
                 />
               </div>
 
               <div>
-                <p style={{ fontSize: 12, color: '#6b7280', margin: '0 0 4px' }}>改写要求</p>
+                <p className={styles.rwLabel}>改写要求</p>
                 <textarea
                   value={rewriteInstruction}
                   onChange={e => setRewriteInstruction(e.target.value)}
                   disabled={rewritingScript}
                   rows={3}
                   placeholder="例如：把结尾改成开放式结局 / 给男主角加一句反驳的台词 / 把语气改得更轻松一点…"
-                  className={styles.textarea}
-                  style={{ fontSize: 13, fontFamily: 'inherit' }}
+                  className={styles.rwInput}
                 />
-                {rewriteError && <p style={{ fontSize: 12, color: '#dc2626', margin: '4px 0 0' }}>{rewriteError}</p>}
+                <div className={styles.rwChips}>
+                  {REWRITE_PRESETS.map(t => (
+                    <button key={t} type="button" className={styles.rwChip} disabled={rewritingScript}
+                      onClick={() => setRewriteInstruction(prev => prev.trim() ? prev.trim() + '；' + t : t)}>
+                      {t}
+                    </button>
+                  ))}
+                </div>
+                {rewriteError && (
+                  <p className={styles.rwErr}><span aria-hidden="true">⚠</span><span>{rewriteError}</span></p>
+                )}
               </div>
             </div>
 
-            <div className={styles.libFoot} style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'flex-end' }}>
+            <div className={styles.rwFoot}>
+              <span className={styles.rwHint}>
+                {rewritingScript ? '生成中，别关窗' : (rewritePreview ? '满意就点「采用」，不满意可改要求再来一次' : '')}
+              </span>
               {rewritePreview && !rewritingScript && (
                 <button type="button" onClick={applyRewrittenScript}
-                  style={{ fontSize: 13, padding: '6px 14px', borderRadius: 6, border: '1px solid #16a34a', background: '#f0fdf4', color: '#16a34a', cursor: 'pointer', fontWeight: 500 }}>
+                  className={`${styles.rwBtn} ${styles.rwBtnApply}`}>
                   采用改写结果
                 </button>
               )}
               <button type="button" onClick={handleRewriteScript}
                 disabled={rewritingScript || !rewriteInstruction.trim()}
-                style={{ fontSize: 13, padding: '6px 14px', borderRadius: 6, border: '1px solid #7c3aed', background: rewritingScript ? '#f5f3ff' : '#fff', color: '#7c3aed', cursor: (rewritingScript || !rewriteInstruction.trim()) ? 'not-allowed' : 'pointer', fontWeight: 500, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                {rewritingScript && <span className={styles.spinner} style={{ width: 11, height: 11, borderColor: '#ddd6fe', borderTopColor: '#7c3aed' }} />}
-                {rewritingScript ? '改写中…' : (rewritePreview ? '重新改写' : '改写')}
+                className={`${styles.rwBtn} ${styles.rwBtnPrimary}`}>
+                {rewritingScript && <span className={styles.spinner} style={{ width: 12, height: 12, borderColor: 'rgba(255,255,255,.45)', borderTopColor: '#fff' }} />}
+                {rewritingScript ? '改写中…' : (rewritePreview ? '重新改写' : '开始改写')}
               </button>
             </div>
           </div>

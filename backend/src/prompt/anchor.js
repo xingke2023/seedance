@@ -55,10 +55,11 @@ function lockSubjectAnchors(promptEn, defs) {
 
   const found = [...text.matchAll(MODEL_DEF)].filter(m => defs.has(Number(m[1])))
   const relabel = new Map()   // 模型给的主体编号 → 该角色绑定的图片编号
-  const used = new Set()      // 这一镜出场的角色（按图片编号）
+  const defined = new Set()   // 模型在这一镜写了定义句的角色
+  const used = new Set()      // 这一镜**真的出场**的角色（按图片编号）
   for (const m of found) {
     relabel.set(Number(m[3]), Number(m[1]))
-    used.add(Number(m[1]))
+    defined.add(Number(m[1]))
   }
 
   // 删掉模型写的定义句；第一句的位置留个记号，原文锚定句贴回原处 ——
@@ -80,10 +81,16 @@ function lockSubjectAnchors(promptEn, defs) {
     })
     .replace(/\u0001(\d+)\u0001/g, '<主体$1>')
 
-  // 定义句删掉后还提到谁，谁就得有定义 —— 模型漏写定义句、只用标签指代也算出场
+  // 定义句删掉后还提到谁，谁就是这一镜的出场角色 —— 模型漏写定义句、只用标签指代也算出场。
+  // **只按这个判定，不采信模型写了几句定义**：一条片子的角色单是整片共用的，模型习惯性地
+  // 把所有人都定义一遍，这一镜其实只有一个人在画面里 —— 多贴的那句定义等于告诉 Seedance
+  // 「画面里还有这么一个人」，轻则挤进背景，重则把两个人的长相揉到一起。
   for (const re of [SUBJ_TAG, IMG_REF]) {
     for (const m of out.matchAll(re)) if (defs.has(Number(m[1]))) used.add(Number(m[1]))
   }
+  // 兜底：正文里一个标签/编号都没提，但模型确实定义了人 —— 这时删光定义等于这一镜完全没有
+  // 角色锚定，宁可多贴也不要不贴，退回模型定义的那批
+  if (used.size === 0) for (const n of defined) used.add(n)
 
   const anchors = [...used].sort((a, b) => a - b).map(n => defs.get(n).anchor).join('；')
   if (!anchors) return out.replace(MARK, '')
