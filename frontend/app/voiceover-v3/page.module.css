@@ -87,8 +87,11 @@
    桌面：按钮照旧居中排在框下面；手机：两者并排，按钮拉到和输入框一样高 */
 .conceptRow { margin-bottom: 10px; text-align: center; }
 .conceptBox { text-align: left; }
-.conceptAnalyzeBtn { margin-top: 10px; font-size: 15px; padding: 9px 18px; border-radius: 6px; border: none; background: #2563eb; color: #fff; font-weight: 600; cursor: pointer; -webkit-tap-highlight-color: transparent; }
-.conceptAnalyzeBtn:disabled { background: #93c5fd; cursor: not-allowed; }
+/* 「剧本分析」要跑一次 Claude 写整份剧本，和「生成分镜脚本」「生成视频」同属要花钱跑的动作，
+   统一用橙色 */
+.conceptAnalyzeBtn { margin-top: 10px; font-size: 15px; padding: 9px 18px; border-radius: 6px; border: none; background: #ea580c; color: #fff; font-weight: 600; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.conceptAnalyzeBtn:hover:not(:disabled) { background: #c2410c; }
+.conceptAnalyzeBtn:disabled { background: #fdba74; cursor: not-allowed; }
 .brMobile { display: none; }
 
 @media (max-width: 768px) {
@@ -162,20 +165,20 @@ button.paramCtl { cursor: pointer; font-weight: 500; text-align: center; }
 
 /* 红色主按钮：留给「生成分镜脚本 / 重新生成分镜脚本」「一键生成所有分镜视频」——
    这三个都是要花钱、要跑很久、且会覆盖已有结果的动作，和普通蓝按钮区分开 */
-.btnDanger { padding: 10px 16px; border-radius: 8px; background: #dc2626; color: #fff; font-size: 14px; font-weight: 600; border: none; cursor: pointer; -webkit-tap-highlight-color: transparent; font-family: inherit; width: 100%; }
-.btnDanger:hover:not(:disabled) { background: #b91c1c; }
-.btnDanger:disabled { background: #fca5a5; cursor: not-allowed; }
-.btnSmDanger { padding: 8px 20px; border-radius: 8px; font-size: 14px; font-weight: 600; background: #dc2626; color: #fff; border: none; cursor: pointer; -webkit-tap-highlight-color: transparent; }
-.btnSmDanger:hover:not(:disabled) { background: #b91c1c; }
-.btnSmDanger:disabled { background: #fca5a5; cursor: not-allowed; }
+.btnDanger { padding: 10px 16px; border-radius: 8px; background: #ea580c; color: #fff; font-size: 14px; font-weight: 600; border: none; cursor: pointer; -webkit-tap-highlight-color: transparent; font-family: inherit; width: 100%; }
+.btnDanger:hover:not(:disabled) { background: #c2410c; }
+.btnDanger:disabled { background: #fdba74; cursor: not-allowed; }
+.btnSmDanger { padding: 8px 20px; border-radius: 8px; font-size: 14px; font-weight: 600; background: #ea580c; color: #fff; border: none; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.btnSmDanger:hover:not(:disabled) { background: #c2410c; }
+.btnSmDanger:disabled { background: #fdba74; cursor: not-allowed; }
 .btnSmGreen { padding: 4px 12px; border-radius: 6px; font-size: 12px; font-weight: 500; background: #16a34a; color: #fff; border: none; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .btnSmGreen:disabled { background: #86efac; cursor: not-allowed; }
 .btnOutline { padding: 4px 12px; border-radius: 6px; border: 1px solid #99f6e4; background: #fff; font-size: 12px; color: #0d9488; cursor: pointer; -webkit-tap-highlight-color: transparent; font-family: inherit; }
 .btnOutlineGreen { border-color: #86efac; color: #15803d; }
 /* 分镜卡上的「生成视频N / 重新生成」：和「生成分镜脚本」「一键生成所有分镜视频」
-   同属要花钱跑的动作，统一用红色 */
-.btnShotGen { padding: 5px 12px; border-radius: 6px; border: none; background: #dc2626; font-size: 12px; color: #fff; font-weight: 500; cursor: pointer; -webkit-tap-highlight-color: transparent; }
-.btnShotGen:hover:not(:disabled) { background: #b91c1c; }
+   同属要花钱跑的动作，统一用橙色 */
+.btnShotGen { padding: 5px 12px; border-radius: 6px; border: none; background: #ea580c; font-size: 12px; color: #fff; font-weight: 500; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.btnShotGen:hover:not(:disabled) { background: #c2410c; }
 .btnShotGen:disabled { opacity: .4; cursor: not-allowed; }
 
 /* ─── Status badges ──────────────────────────────────────────────────────── */
@@ -241,8 +244,8 @@ button.paramCtl { cursor: pointer; font-weight: 500; text-align: center; }
 .spinnerBlue { border-color: #bfdbfe; border-top-color: #2563eb; }
 
 /* ─── Reset button ───────────────────────────────────────────────────────── */
-.resetBtn { padding: 2px 10px; border-radius: 9999px; font-size: 12px; border: 1px solid #fca5a5; background: #fff; color: #dc2626; cursor: pointer; -webkit-tap-highlight-color: transparent; }
-.resetBtn:hover { background: #fef2f2; }
+.resetBtn { padding: 2px 10px; border-radius: 9999px; font-size: 12px; border: 1px solid #fdba74; background: #fff; color: #ea580c; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.resetBtn:hover { background: #fff7ed; }
 
 /* ─── TTS regen button ───────────────────────────────────────────────────── */
 
@@ -534,7 +537,7 @@ button.paramCtl { cursor: pointer; font-weight: 500; text-align: center; }
 .rwDoc {
   width: 100%;
   box-sizing: border-box;
-  border: 1px solid #e6ebf2;
+  border: 1px solid #000;
   border-radius: 10px;
   background: #f8fafc;
   padding: 12px 14px;
@@ -550,7 +553,7 @@ button.paramCtl { cursor: pointer; font-weight: 500; text-align: center; }
 .rwInput {
   width: 100%;
   box-sizing: border-box;
-  border: 1.5px solid #e2e8f0;
+  border: 1.5px solid #000;
   border-radius: 10px;
   background: #fff;
   padding: 11px 13px;
@@ -600,15 +603,18 @@ button.paramCtl { cursor: pointer; font-weight: 500; text-align: center; }
   color: #dc2626;
 }
 
+/* 按钮居中：提示文字单独占一行（原来它 margin-right:auto 把按钮顶到右边） */
 .rwFoot {
   display: flex;
   align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 12px 16px;
   border-top: 1px solid #eef2f7;
   background: #fbfcfe;
 }
-.rwHint { font-size: 13px; color: #94a3b8; margin-right: auto; }
+.rwHint { width: 100%; text-align: center; font-size: 13px; color: #94a3b8; }
 
 .rwBtn {
   display: inline-flex;

@@ -1843,6 +1843,8 @@ export default function VoiceoverPage() {
               setScriptAnalysis(data.params.scriptAnalysis);
             }
             if (data.params.dialogueScript) setDialogueScript(data.params.dialogueScript);
+            // 「专业分镜生成」浮窗里填的创作目标/受众/基调/核心信息/镜头数/总时长/叙事结构
+            if (data.params.sbSettings) setSbSettings(prev => ({ ...prev, ...data.params.sbSettings }));
           }
           if (data.seed != null) { batchSeedRef.current = data.seed; setSeed(data.seed); }
           // Load shots from DB
@@ -1946,7 +1948,7 @@ export default function VoiceoverPage() {
     if (!dataLoaded || !videoId) return;
     setVideoDirty(true);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [script, subtitleInput, style, ratio, voice, model, resolution, generateAudio, watermark, seed, serviceTier, returnLastFrame, draft, webSearch, subtitleStyle, banner, bannerStyle, videoSubjects, mediaItems, dialogueScript]);
+  }, [script, subtitleInput, style, ratio, voice, model, resolution, generateAudio, watermark, seed, serviceTier, returnLastFrame, draft, webSearch, subtitleStyle, banner, bannerStyle, videoSubjects, mediaItems, dialogueScript, sbSettings]);
 
   function markShotDirty(idx: number) {
     setDirtyShotIdxs(prev => new Set(prev).add(idx));
@@ -2038,6 +2040,21 @@ export default function VoiceoverPage() {
       : prev);
   }
 
+  // videos.params 是**整块覆盖**写的（后端 PUT 直接把这个对象 JSON.stringify 进 JSONB），
+  // 少写一个字段就等于把它从库里删掉 —— 所以只有这一处拼 params，别处要写就调它、
+  // 需要改的字段用 extra 覆盖。以前「生成分镜脚本」那三处各拼各的、都漏了 scriptAnalysis，
+  // 生成一次分镜就把角色卡（形象/性格/头像/音色绑定）从库里抹掉了。
+  const buildVideoParams = (extra?: Record<string, unknown>) => ({
+    model, resolution, generateAudio, watermark, seed, serviceTier, priority,
+    returnLastFrame, draft, webSearch, subtitleStyle, banner, bannerStyle,
+    dialogueScript, sbSettings,
+    scriptAnalysis: scriptAnalysis.map(s => ({
+      label: s.label, type: s.type, appearance: s.appearance, personality: s.personality,
+      linkedSubjectId: s.linkedSubjectId, linkedAudioUrl: s.linkedAudioUrl,
+    })),
+    ...(extra || {}),
+  });
+
   async function saveAll() {
     setSavingShots(true);
     const promises: Promise<any>[] = [];
@@ -2047,7 +2064,7 @@ export default function VoiceoverPage() {
       if (videoDirty) {
         Object.assign(payload, { script, subtitle_input: subtitleInput, style, ratio, voice });
       }
-      payload.params = { model, resolution, generateAudio, watermark, seed, serviceTier, returnLastFrame, draft, webSearch, subtitleStyle, banner, bannerStyle, dialogueScript, scriptAnalysis: scriptAnalysis.map(s => ({ label: s.label, type: s.type, appearance: s.appearance, personality: s.personality, linkedSubjectId: s.linkedSubjectId, linkedAudioUrl: s.linkedAudioUrl })) };
+      payload.params = buildVideoParams();
       payload.subject_ids = videoSubjects.map(s => s.id);
       payload.media_items = mediaItems.map(m => ({ media_type: m.mediaType, url: m.url, name: m.name, description: m.description }));
       promises.push(api.put(`/videos/${videoId}`, payload).catch(() => {}));
@@ -2231,6 +2248,7 @@ export default function VoiceoverPage() {
     const url = scriptAnalysis[idx]?.linkedAudioUrl;
     const next = scriptAnalysis.map((a, i) => i === idx ? { ...a, linkedAudioUrl: undefined } : a);
     setScriptAnalysis(next);
+    setVideoDirty(true);   // 解绑的是自己传的音频时 mediaItems 不变，不标脏就没有「保存草稿」按钮
     releasePresetAudio(url, next);
   }
 
@@ -2754,21 +2772,21 @@ export default function VoiceoverPage() {
       const proj = await api.post<{ id: string }>('/projects', { name: autoName });
       setProjectId(proj.id);
       // Create video
-      const video = await api.post<{ id: string }>(`/projects/${proj.id}/videos`, { name: autoName, script: script.trim(), subtitle_input: subtitleInput.trim(), style, ratio, voice, seed: batchSeedRef.current, params: { model, resolution, generateAudio, watermark, seed: batchSeedRef.current, serviceTier, priority, returnLastFrame, draft, webSearch, dialogueScript: finalDialogueScript } });
+      const video = await api.post<{ id: string }>(`/projects/${proj.id}/videos`, { name: autoName, script: script.trim(), subtitle_input: subtitleInput.trim(), style, ratio, voice, seed: batchSeedRef.current, params: buildVideoParams({ seed: batchSeedRef.current, dialogueScript: finalDialogueScript }) });
       vid = video.id;
       setVideoId(vid);
       setVideoName(autoName);
       window.history.replaceState(null, '', `/voiceover-v3?projectId=${proj.id}&videoId=${vid}`);
     } else if (!vid) {
       // Create video in existing project
-      const video = await api.post<{ id: string }>(`/projects/${projectId}/videos`, { name: autoName, script: script.trim(), subtitle_input: subtitleInput.trim(), style, ratio, voice, seed: batchSeedRef.current, params: { model, resolution, generateAudio, watermark, seed: batchSeedRef.current, serviceTier, priority, returnLastFrame, draft, webSearch, dialogueScript: finalDialogueScript } });
+      const video = await api.post<{ id: string }>(`/projects/${projectId}/videos`, { name: autoName, script: script.trim(), subtitle_input: subtitleInput.trim(), style, ratio, voice, seed: batchSeedRef.current, params: buildVideoParams({ seed: batchSeedRef.current, dialogueScript: finalDialogueScript }) });
       vid = video.id;
       setVideoId(vid);
       setVideoName(autoName);
       window.history.replaceState(null, '', `/voiceover-v3?projectId=${projectId}&videoId=${vid}`);
     } else {
       // Update existing video
-      await api.put(`/videos/${vid}`, { script: script.trim(), subtitle_input: subtitleInput.trim(), style, ratio, voice, seed: batchSeedRef.current, audio_url: ttsAudioUrl, params: { model, resolution, generateAudio, watermark, seed: batchSeedRef.current, serviceTier, priority, returnLastFrame, draft, webSearch, dialogueScript: finalDialogueScript } });
+      await api.put(`/videos/${vid}`, { script: script.trim(), subtitle_input: subtitleInput.trim(), style, ratio, voice, seed: batchSeedRef.current, audio_url: ttsAudioUrl, params: buildVideoParams({ seed: batchSeedRef.current, dialogueScript: finalDialogueScript }) });
     }
 
     // Save shots to DB — delete existing first, then insert new
@@ -3122,7 +3140,7 @@ export default function VoiceoverPage() {
                   <span onClick={() => setScriptCollapsed(v => !v)} style={{ fontSize: 10, cursor: 'pointer', transition: 'transform 0.2s', transform: scriptCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}>▼</span>
                   {/* 和「N个分镜 · 视频N秒」同一个红色粗框，两个大段落一眼分得开 */}
                   <span onClick={() => setScriptCollapsed(v => !v)}
-                    style={{ fontSize: 18, fontWeight: 700, color: '#111827', border: '3px solid #dc2626', borderRadius: 8, padding: '4px 12px', display: 'inline-block', cursor: 'pointer', background: '#fef2f2' }}>视频描述</span>
+                    style={{ fontSize: 18, fontWeight: 700, color: '#111827', border: '3px solid #dc2626', borderRadius: 8, padding: '4px 12px', display: 'inline-block', cursor: 'pointer', background: '#fef2f2' }}>剧本编写</span>
                   <button type="button" onClick={() => setShowExamples(v => !v)}
                     style={{ display: 'inline-flex', alignItems: 'center', gap: 2, background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px', color: '#0d9488', fontSize: 13, fontWeight: 500 }}>
                     示例
@@ -3183,8 +3201,8 @@ export default function VoiceoverPage() {
                       )}
                       <textarea rows={4} value={conceptText}
                         onChange={e => setConceptText(e.target.value)}
-                        placeholder="输入视频描述…"
-                        className={styles.textarea} style={{ fontFamily: 'inherit', fontSize: 13, border: '2px solid #000', height: '100%' }} />
+                        placeholder="输入剧本…"
+                        className={styles.textarea} style={{ fontFamily: 'inherit', fontSize: 16, lineHeight: 1.8, border: '2px solid #000', height: '100%' }} />
                     </div>
                     {analyzeBtn}
                   </div>
@@ -3246,7 +3264,7 @@ export default function VoiceoverPage() {
                         {stepTab === 'script' && dialogueScript && !analyzingScript && (
                           <button type="button" onClick={() => { setRewriteOpen(true); setRewritePreview(''); setRewriteError(''); }}
                             style={{ fontSize: 11, padding: '4px 10px', border: '1px solid #7c3aed', borderRadius: 5, background: '#fff', cursor: 'pointer', color: '#7c3aed', fontWeight: 500, whiteSpace: 'nowrap' }}>
-                            AI改写
+                            剧本改写
                           </button>
                         )}
                       </div>
@@ -3266,7 +3284,7 @@ export default function VoiceoverPage() {
                           onChange={e => setDialogueScript(e.target.value)}
                           readOnly={analyzingScript}
                           rows={Math.min(10, Math.max(5, dialogueScript.split('\n').length))}
-                          style={{ fontSize: 14, fontFamily: 'inherit', lineHeight: 1.8, background: analyzingScript ? '#faf5ff' : '#f9fafb', borderColor: '#000' }}
+                          style={{ fontSize: 16, fontFamily: 'inherit', lineHeight: 1.9, background: analyzingScript ? '#faf5ff' : '#f9fafb', borderColor: '#000' }}
                           placeholder="对白剧本将显示在这里，可手动编辑…"
                         />
                       ) : (
@@ -3405,7 +3423,7 @@ export default function VoiceoverPage() {
                                         )}
                                         {item.linkedAudioUrl && (
                                           <button type="button" onClick={() => { unbindVoice(idx); setScriptAnalysis(prev => prev.map((s, i) => i === idx ? { ...s, _voicePickerOpen: false } : s)); }}
-                                            style={{ marginTop: 6, fontSize: 11, color: '#dc2626', background: 'none', border: 'none', cursor: 'pointer' }}>清除音色</button>
+                                            style={{ marginTop: 6, fontSize: 11, color: '#ea580c', background: 'none', border: 'none', cursor: 'pointer' }}>清除音色</button>
                                         )}
                                         <button type="button" onClick={() => setScriptAnalysis(prev => prev.map((s, i) => i === idx ? { ...s, _voicePickerOpen: false } : s))}
                                           style={{ marginTop: 6, marginLeft: 8, fontSize: 11, color: '#6b7280', background: 'none', border: 'none', cursor: 'pointer' }}>关闭</button>
@@ -3424,7 +3442,7 @@ export default function VoiceoverPage() {
                                   setVideoSubjects(newA.filter(a => a.linkedSubjectId).map(a => projectSubjects.find(ps => ps.id === a.linkedSubjectId)).filter(Boolean) as ProjectSubject[]);
                                   releasePresetAudio(droppedAudio, newA);       // 角色没了，它的预设音色也别留着占编号
                                 }}
-                                  style={{ background: 'none', border: '1px solid #dc2626', borderRadius: 4, color: '#dc2626', cursor: 'pointer', fontSize: 11, padding: '3px 8px' }}>删除</button>
+                                  style={{ background: 'none', border: '1px solid #ea580c', borderRadius: 4, color: '#ea580c', cursor: 'pointer', fontSize: 11, padding: '3px 8px' }}>删除</button>
                               </span>
                             </div>
                             {/* 形象/性格都可改。**形象这段会被逐镜一字不改地贴进每个分镜的
@@ -3435,14 +3453,14 @@ export default function VoiceoverPage() {
                               <span style={{ fontSize: 10, color: '#9ca3af', marginLeft: 4 }}>= 每一镜提示词里的「角色定义」，原样写入</span>
                               <textarea value={item.appearance || ''} rows={3}
                                 onChange={e => patchAnalysis(idx, { appearance: e.target.value })}
-                                className={styles.textarea} style={{ fontSize: 12, lineHeight: 1.6, marginTop: 2 }} />
+                                className={styles.textarea} style={{ fontSize: 15, lineHeight: 1.8, marginTop: 2 }} />
                             </label>
                             <label style={{ display: 'block', fontSize: 12, color: '#374151', margin: 0 }}>
                               <b>性格</b>
                               <span style={{ fontSize: 10, color: '#9ca3af', marginLeft: 4 }}>只用于这张卡，不进提示词</span>
                               <textarea value={item.personality || ''} rows={2}
                                 onChange={e => patchAnalysis(idx, { personality: e.target.value })}
-                                className={styles.textarea} style={{ fontSize: 12, lineHeight: 1.6, marginTop: 2 }} />
+                                className={styles.textarea} style={{ fontSize: 15, lineHeight: 1.8, marginTop: 2 }} />
                             </label>
                           </div>
                         ))}
@@ -3506,7 +3524,7 @@ export default function VoiceoverPage() {
                     className={styles.btnDanger} style={{ padding: '7px 24px', width: 'auto' }}>
                     {initing ? (
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                        <span className={styles.spinner} style={{ borderColor: '#fca5a5', borderTopColor: '#fff' }} />
+                        <span className={styles.spinner} style={{ borderColor: '#fdba74', borderTopColor: '#fff' }} />
                         分镜进行中{initElapsed > 0 ? ` ${initElapsed}s` : ''}...
                       </span>
                     ) : anyUploading ? '素材上传中，请等待…' : mediaDescMissing ? '请填写素材说明' : initResult ? '重新生成分镜脚本' : '生成分镜脚本'}
@@ -4275,9 +4293,11 @@ export default function VoiceoverPage() {
             </div>
 
             <div className={styles.rwFoot}>
-              <span className={styles.rwHint}>
-                {rewritingScript ? '生成中，别关窗' : (rewritePreview ? '满意就点「采用」，不满意可改要求再来一次' : '')}
-              </span>
+              {(rewritingScript || rewritePreview) && (
+                <span className={styles.rwHint}>
+                  {rewritingScript ? '生成中，别关窗' : '满意就点「采用」，不满意可改要求再来一次'}
+                </span>
+              )}
               {rewritePreview && !rewritingScript && (
                 <button type="button" onClick={applyRewrittenScript}
                   className={`${styles.rwBtn} ${styles.rwBtnApply}`}>
