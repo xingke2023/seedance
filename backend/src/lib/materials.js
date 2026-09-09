@@ -10,6 +10,7 @@
 
 const fs = require('fs')
 const path = require('path')
+const crypto = require('crypto')
 const { UPLOAD_ROOT } = require('./uploads')
 
 const ROOT = process.env.MATERIALS_DIR || path.join(__dirname, '..', '..', '..', 'materials')
@@ -53,15 +54,34 @@ function materialRelPath(url) {
   return i < 0 ? '' : p.slice(i + '/materials/'.length)
 }
 
+// 本机副本的落地路径**一律用 ASCII**：`音频/音色/青年-女-亲切女声.mp3` → `audio/<sha1前16位>.mp3`。
+// 清单里的中文路径原样落地的话，交出去的地址里就带一串中文（或 %E9%9F%B3 这种转义），
+// 取这个地址的是 Seedance / ffmpeg / 各种客户端，谁在中间少做一次编码就取不到 ——
+// 「音频链接失效」多半就是这么来的。名字看不懂没关系：列表上显示的 name 来自清单，
+// 和文件名无关；hash 由中文相对路径算出，同一条素材每次算出来都一样。
+const KIND_DIR = { '音频': 'audio', '视频': 'video', '图片': 'image' }
+
+function asciiRel(rel) {
+  if (!rel) return ''
+  const ext = (path.extname(rel) || '').toLowerCase() || '.bin'
+  const kind = KIND_DIR[String(rel).split('/')[0]] || 'misc'
+  const hash = crypto.createHash('sha1').update(rel).digest('hex').slice(0, 16)
+  return `${kind}/${hash}${ext}`
+}
+
 // 转存过的素材优先交本机地址 —— 外链直接甩给 Seedance 偶尔取不到，
 // 而且它随时可能变。没转存的（没跑过 scripts/download-materials.js）照旧给外链。
 // 缩略图不动：视频靠 TOS 的 ?x-tos-process=video/snapshot 现取首帧，本机没有这能力。
+// 地址前缀取 MATERIALS_BASE_URL，没配就退回 WEBHOOK_BASE_URL。
 function localUrl(url) {
   const rel = materialRelPath(url)
   if (!rel) return ''
-  if (!fs.existsSync(path.join(UPLOAD_ROOT, 'materials', rel))) return ''
-  const base = (process.env.WEBHOOK_BASE_URL || '').replace(/\/$/, '')
-  return `${base}/uploads/materials/${rel}`
+  const base = (process.env.MATERIALS_BASE_URL || process.env.WEBHOOK_BASE_URL || '').replace(/\/$/, '')
+  const ascii = asciiRel(rel)
+  if (fs.existsSync(path.join(UPLOAD_ROOT, 'materials', ascii))) return `${base}/uploads/materials/${ascii}`
+  // 迁移之前下的中文文件名副本仍然认（存量数据里存的就是这种地址）
+  if (fs.existsSync(path.join(UPLOAD_ROOT, 'materials', rel))) return `${base}/uploads/materials/${rel}`
+  return ''
 }
 
 let cache = null
@@ -87,8 +107,8 @@ function load({ local = true } = {}) {
   const images = (all.images?.items || []).map(im => ({
     name: String(im.name || '').trim(),
     category: categoryFromUrl(im.thumbnail, '图片'),
-    url: prettyPath(stripQuery(im.thumbnail)),
-    thumb: prettyPath(im.thumbnail || ''),
+    url: pick(prettyPath(stripQuery(im.thumbnail))),   // 转存过就交本机 ASCII 地址
+    thumb: prettyPath(im.thumbnail || ''),             // 缩略图仍走 TOS（带 ?x-tos-process 缩放）
   })).filter(im => im.url)
 
   // 音色名字形如「青年-女-亲切女声」，第一段就是年龄段分组
@@ -124,4 +144,4 @@ function load({ local = true } = {}) {
   return built
 }
 
-module.exports = { load, materialRelPath, reset: () => { cache = null } }
+module.exports = { load, materialRelPath, asciiRel, reset: () => { cache = null } }

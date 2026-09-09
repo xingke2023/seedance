@@ -97,53 +97,6 @@ type AnalysisItem = {
 type VoicePreset = { name: string; category: string; gender: string; duration: string; url: string; avatar: string };
 
 // 从角色卡的文字里读性别；读不出来按不限处理
-function guessGender(a: AnalysisItem): '男' | '女' | '' {
-  const t = `${a.label} ${a.appearance} ${a.personality}`;
-  if (/女|母亲|妈妈|姐|妹|奶奶|外婆|阿姨|女士|女性/.test(t)) return '女';
-  if (/男|父亲|爸爸|哥|弟|爷爷|外公|叔叔|先生|男性/.test(t)) return '男';
-  return '';
-}
-
-// 年龄段映射到音色库的分组名（青年 / 少年_少女 / 中年 / 儿童 / 老年）
-function guessAgeGroup(a: AnalysisItem): string {
-  const t = `${a.label} ${a.appearance} ${a.personality}`;
-  const m = t.match(/(\d{1,2})\s*(?:岁|多岁)/);
-  const age = m ? Number(m[1]) : 0;
-  if (age) {
-    if (age < 13) return '儿童';
-    if (age < 18) return '少年_少女';
-    if (age < 36) return '青年';
-    if (age < 60) return '中年';
-    return '老年';
-  }
-  if (/儿童|小孩|孩子|幼儿|小男孩|小女孩/.test(t)) return '儿童';
-  if (/少年|少女|中学生|高中生|青少年/.test(t)) return '少年_少女';
-  if (/老人|老年|爷爷|奶奶|外公|外婆|老先生|老太太/.test(t)) return '老年';
-  if (/中年|大叔|大妈|阿姨|叔叔/.test(t)) return '中年';
-  return '青年';   // 剧本里最常见的默认
-}
-
-// 挑一条没被别的角色占用的音色：先按「分组+性别」，放宽到「分组」，再放宽到「性别」，
-// 最后随便给一条。同一批角色里用 index 错开，两个同性别同龄的角色不会撞同一把嗓子。
-function pickPresetVoice(a: AnalysisItem, presets: VoicePreset[], taken: Set<string>, seed: number): VoicePreset | null {
-  if (presets.length === 0) return null;
-  const group = guessAgeGroup(a);
-  const gender = guessGender(a);
-  const pools = [
-    presets.filter(v => v.category === group && (!gender || v.gender === gender)),
-    presets.filter(v => v.category === group),
-    presets.filter(v => !gender || v.gender === gender),
-    presets,
-  ];
-  for (const pool of pools) {
-    const free = pool.filter(v => !taken.has(v.url));
-    if (free.length > 0) return free[seed % free.length];
-  }
-  return null;
-}
-
-// 角色/素材上下文的构建（纯函数）。生成分镜那一刻可能刚给角色自动配了音色，
-// state 还没落地，所以要能拿「算好的那份」直接构建，不能只依赖 useMemo 里的旧值。
 function buildSubjectContext(videoSubjects: ProjectSubject[], mediaItems: MediaItem[], scriptAnalysis: AnalysisItem[]) {
     const contentMedia = buildContentMedia(videoSubjects, mediaItems);
     const readyImages = contentMedia.filter(x => x.from === 'media' && x.mediaType === 'image');
@@ -222,6 +175,10 @@ interface AvatarItem { assetId: string; label: string; thumb: string; }
 // ⚠️ 图片这 9 个是**整条请求**的额度，带图角色的头像也占位（提交时排在参考素材之前），
 //    所以参考素材能上传几张图要减掉角色数 —— 见组件里的 mediaLimit()。
 const MEDIA_CAPS   = { image: 9, video: 3, audio: 3 } as const;
+// 音频除了条数（≤3）还有一条**总时长**上限：所有参考音频加起来 ≤ 15.2 秒（官方 API 实测）。
+// 超了任务提交后立刻 failed，而国内站代理把错误报成「image_url 下载失败」，看不出是音频的事。
+// 页面这里只显示用了多少，不拦 —— 提交时后端按条数分摊着截短（见 video/service.js 的 trimAudio）。
+const AUDIO_SEC_CAP = 15.2;
 const MEDIA_ZH     = { image: '图片', video: '视频', audio: '音频' } as const;
 
 const API_BASE = '/api';
@@ -1558,6 +1515,19 @@ export default function VoiceoverPage() {
     () => mediaItems.filter(m => m.url && !m.uploading && m.mediaType === 'audio'),
     [mediaItems]
   );
+  // 参考音频**加起来**不能超过 15.2 秒（官方 API 实测出来的硬规则，超了任务直接 failed；
+  // 国内站代理还会把这个错误报成「image_url 下载失败」，根本看不出跟音频有关）。
+  // 预设音色的时长清单里现成有；用户自己传的这里按 0 算 —— 后端提交前会用 ffprobe 再兜一道，
+  // 页面这层只是让选音色时看得见还剩多少。
+  const audioSecOf = useCallback((url?: string) => {
+    if (!url) return 0;
+    const p = voicePresets.find(v => v.url === url || v.url === prettyUrl(url));
+    return p ? (parseFloat(p.duration) || 0) : 0;
+  }, [voicePresets]);
+  const audioSecUsed = useMemo(
+    () => audioItems.reduce((sum, m) => sum + audioSecOf(m.url), 0),
+    [audioItems, audioSecOf]
+  );
   // 角色 → 音频编号的绑定，一行一个。后端拿它盖掉模型自己挑的 audio_ref，
   // 该角色说话的每一镜都贴同一句「使用@音频N…的音色说话」
   // 预设素材入列参考素材。地址是火山公开 TOS 的直链，不下载不转存 ——
@@ -1671,7 +1641,8 @@ export default function VoiceoverPage() {
     }
   }
 
-  function pickVoicePreset(idx: number, preset: { name: string; url: string }) {
+  function pickVoicePreset(idx: number, preset: { name: string; url: string; duration?: string }) {
+    // 总时长超了不拦：提交时后端按条数分摊着截短（3 条各 ~4.8s），克隆音色几秒样本就够
     setMediaItems(prev => prev.some(m => m.url === preset.url) ? prev : [...prev, {
       uid: `preset-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       mediaType: 'audio' as const,
@@ -2541,35 +2512,13 @@ export default function VoiceoverPage() {
     pollRefs.current = {};
 
     try {
-      // 没人工绑音色的角色，这里按性别年龄从预设库挑一条钉死 —— 同一个角色全片同一把嗓子，
-      // 靠的是「一条固定的参考音频」，不是让模型每镜自己写英文音色描述。
-      // 上限内挑不完就只配前几个（音频最多 MEDIA_CAPS.audio 条），其余退回音色描述。
-      let nextAnalysis = scriptAnalysis;
-      let nextMedia = mediaItems;
-      if (voicePresets.length > 0 && scriptAnalysis.some(a => !a.linkedAudioUrl)) {
-        const taken = new Set(scriptAnalysis.map(a => a.linkedAudioUrl).filter(Boolean) as string[]);
-        let audioSlots = mediaLimit('audio') - nextMedia.filter(m => m.mediaType === 'audio').length;
-        const added: MediaItem[] = [];
-        nextAnalysis = scriptAnalysis.map((a, i) => {
-          if (a.linkedAudioUrl || audioSlots <= 0) return a;
-          const v = pickPresetVoice(a, voicePresets, taken, i);
-          if (!v) return a;
-          taken.add(v.url); audioSlots--;
-          added.push({
-            uid: `preset-${Date.now()}-${i}`,
-            mediaType: 'audio',
-            url: v.url,
-            name: v.name,
-            description: `预设音色：${v.name}`,
-          });
-          return { ...a, linkedAudioUrl: v.url };
-        });
-        if (added.length > 0) {
-          nextMedia = [...mediaItems, ...added];
-          setMediaItems(nextMedia);
-          setScriptAnalysis(nextAnalysis);
-        }
-      }
+      // 音色**不自动配**：以前这里会给没绑音色的角色从预设库各挑一条钉死、并把音频塞进
+      // 参考素材（@音频N 要有编号才能引用）—— 点一次「生成分镜脚本」参考素材里就凭空
+      // 多出几条音频，不是用户加的。现在只用页面上已经绑好的音色，没绑的角色退回模型
+      // 写的英文音色描述（`Voice of X: …`）。
+      // 代价是没绑音色的角色逐镜声音会飘 —— 要锁死就在角色卡上点「音色」自己挑一条。
+      const nextAnalysis = scriptAnalysis;
+      const nextMedia = mediaItems;
 
       const readyMedia = nextMedia.filter(m => m.url && !m.uploading);
       const subjectImagesCount = videoSubjects.filter(s => s.image_url).length;
@@ -3403,6 +3352,10 @@ export default function VoiceoverPage() {
                                           <div style={{ marginTop: 8, borderTop: '1px solid #f1f5f9', paddingTop: 8 }}>
                                             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
                                               <span style={{ fontSize: 11, color: '#6b7280', whiteSpace: 'nowrap' }}>预设音色 {voicePresets.length}</span>
+                                              <span style={{ fontSize: 10, whiteSpace: 'nowrap', color: audioSecUsed > AUDIO_SEC_CAP ? '#ea580c' : '#9ca3af' }}
+                                                title={`参考音频加起来不能超过 ${AUDIO_SEC_CAP} 秒（接口硬规则）。超了不用管，提交时会按条数分摊自动截短，克隆音色几秒样本就够`}>
+                                                {audioSecUsed.toFixed(1)}/{AUDIO_SEC_CAP}s{audioSecUsed > AUDIO_SEC_CAP ? ' 会自动截短' : ''}
+                                              </span>
                                               <input value={voiceQuery} onChange={e => setVoiceQuery(e.target.value)} placeholder="搜索 / 青年 女 …"
                                                 style={{ flex: 1, fontSize: 11, padding: '3px 6px', border: '1px solid #e5e7eb', borderRadius: 4 }} />
                                             </div>
@@ -4003,11 +3956,17 @@ export default function VoiceoverPage() {
                         )}
                         <div className={styles.mergeFooter} style={{ marginTop: 14, justifyContent: 'center' }}>
                           <div style={{ display: 'flex', justifyContent: 'center', width: '100%' }}>
-                            {/* 已经有成片时，这个按钮挪到下面「新窗口打开」右边去了 */}
-                            {succeededCount >= 1 && !mergedVideoUrl && (
-                              <button type="button" onClick={handleMerge} disabled={merging || !canMerge}
+                            {/* 合并按钮**一直在**：以前合过一次就把它藏了（只剩成片那行里一个小的
+                                「重新生成」），全部分镜生成完回到页面反而找不到合并入口。
+                                已经有成片时点它要先确认 —— 会覆盖现在这条 */}
+                            {succeededCount >= 1 && (
+                              <button type="button" disabled={merging || !canMerge}
+                                onClick={() => {
+                                  if (mergedVideoUrl && !window.confirm('已经有一条合成好的最终视频，重新生成会用新的覆盖它。确定继续？')) return;
+                                  handleMerge();
+                                }}
                                 className={styles.btnSmGreen} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '7px 32px', fontSize: 15, fontWeight: 600, borderRadius: 10 }}>
-                                {merging ? <><span className={styles.spinner} style={{ borderColor: '#bbf7d0', borderTopColor: '#16a34a' }} />合并中…</> : `${mergedVideoUrl ? '重新生成' : '分镜合并'}(分镜视频+字幕+对白原声)`}
+                                {merging ? <><span className={styles.spinner} style={{ borderColor: '#bbf7d0', borderTopColor: '#16a34a' }} />合并中…</> : `${mergedVideoUrl ? '重新合并' : '分镜合并'}(分镜视频+字幕+对白原声)`}
                               </button>
                             )}
                           </div>
@@ -4020,12 +3979,6 @@ export default function VoiceoverPage() {
                                 <a href={mergedVideoUrl} download className={`${styles.btnOutline} ${styles.btnOutlineGreen}`} style={{ textDecoration: 'none', padding: '4px 10px', fontSize: 12 }}>下载</a>
                                 <a href={mergedVideoUrl} target="_blank" rel="noopener noreferrer"
                                   className={`${styles.btnOutline} ${styles.btnOutlineGreen}`} style={{ textDecoration: 'none', padding: '4px 10px', fontSize: 12 }}>新窗口打开</a>
-                                {/* 重新合并会覆盖现在这条成片，先确认 */}
-                                <button type="button" disabled={merging || !canMerge}
-                                  onClick={() => { if (window.confirm('已经有一条合成好的最终视频，重新生成会用新的覆盖它。确定继续？')) handleMerge(); }}
-                                  className={styles.btnSmGreen} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 12px', fontSize: 12, borderRadius: 6 }}>
-                                  {merging ? <><span className={styles.spinner} style={{ borderColor: '#bbf7d0', borderTopColor: '#16a34a' }} />合并中…</> : '重新生成(分镜视频+字幕+对白)'}
-                                </button>
                               </div>
                             </div>
                             <video src={mergedVideoUrl} muted autoPlay loop className={styles.mergedVideo}

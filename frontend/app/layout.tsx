@@ -113,7 +113,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>MACRODATA保险短视频制作系统(Seedance2.5高级版本)</title>
+        <title>短视频制作系统</title>
         <style dangerouslySetInnerHTML={{ __html: THEME_VARS }} />
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOT }} />
       </head>

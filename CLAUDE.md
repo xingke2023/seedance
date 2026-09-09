@@ -116,8 +116,27 @@
     编号和实际排布对不上，角色就指到别人的图上了。现在四处都从同一份 `contentMedia` 出
   - **同一张图既是角色头像又被加进参考素材时只留前面那条**：重复既白占 9 张图的额度，
     又让后面所有编号错位
+- **参考音频/视频另有三条硬规则**（2026-09 拿官方 API `ark.cn-beijing.volces.com` 实测，
+  国内站代理同样生效）：
+  - **所有音频加起来 ≤ 15.2 秒** —— `audio total duration (seconds) … must be less than or equal to 15.2`
+  - **所有视频加起来 ≤ 15.2 秒** —— `video total duration … ≤ 15.2 … in r2v`。
+    **音频和视频各算各的**，不是合计：实测「视频 8.2s + 音频 11.4s」合计 19.6s 照样成功
+  - **音频不能是唯一的参考素材**，同一请求至少还要有一张图或一段视频 ——
+    `reference_audio cannot be the only reference input`
+  ⚠️ **国内站代理（`vidgen.fidelityai.cn`）不会如实转达这几句**，一律报成
+  `The parameter image_url … resource download failed`（内容里一张图都没有时也这么报），
+  查起来很容易误判成「素材地址失效」。所以三条都在 `video/service.js` 里挡：
+  - **音频超时长：不丢，按条数分摊着截短**（`trimMedia()`，最大最小公平分配：短的拿满、
+    省下的匀给长的；3 条各 ~4.8s，预算 14.4s 留余量）。丢一条等于那个角色没了音色，
+    而克隆音色几秒样本就够。截好的落在 `uploads/trimmed/<hash>.mp3`
+    （同一条素材+同一目标秒数只截一次，逐镜提交直接命中缓存；本机素材直接读文件不绕公网）。
+    ⚠️ ffmpeg 写的临时文件是 `xxx.part`，**必须显式 `-f mp3`** —— 靠扩展名猜格式会失败
+  - **视频超时长：不截短，整段丢掉靠后的**。参考视频给的是运镜/动作的完整节奏，
+    从中间切一刀这条参考就废了（不像音色，几秒样本就够）—— 宁可少给一段完整的，
+    也不给两段残的。丢靠后的：素材本来就按「重要的排前面」入列
+  - 只有音频没有图/视频时，把音频整体去掉（留着必然 failed，没音色只是声音会飘，还能交付）
 - **素材数量上限**：一次请求 `image_url` 最多 **9** 个、`video_url` / `audio_url` 各 **3** 个
-  （超了接口直接拒）。两道闸：
+  （超了接口直接拒：`expected at most 3 audio contents but got 4`）。两道闸：
   - 前端 `voiceover-v3` 的 `MEDIA_CAPS` + `mediaLimit()` 挡在上传/入列那一步。
     **图片这 9 个是整条请求的额度**，带图角色的头像提交时排在参考素材之前、同样占名额，
     所以参考素材能加几张图 = `9 - 带图角色数`（浮窗底部实时显示还剩几个）
@@ -510,14 +529,19 @@ front matter 用 `when_*` 声明生效条件，**加一条手艺 = 丢一个 `.m
 前端 `voiceover-v3/page.tsx` 的 `prettyUrl()` 是同一条规则（粘贴链接添加素材时用），
 存量素材存的是转义版，所以缩略图查表、「已加入」标记、去重比对前都先过一遍它。
 
-**视频/音频已转存到本机**（图片没有，仍走 TOS）：`node backend/scripts/download-materials.js`
-把它们下到 `backend/uploads/materials/<视频|音频>/<分类>/<中文文件名>`，
-`load()` 发现本地有副本就交 `${WEBHOOK_BASE_URL}/uploads/materials/…`，不再把 volces 外链甩给
-Seedance。脚本可重复跑（只下缺的，`--force` 全重下），**失败的逐条打印并以非 0 退出**。
-`uploads/` 在 .gitignore 里，167MB 不进仓库。
+**视频/音频/图片全部转存到本机，文件名一律 ASCII**：`node backend/scripts/download-materials.js`
+把三类都下到 `backend/uploads/materials/<audio|video|image>/<sha1 前16位><扩展名>`
+（`asciiRel()`，hash 由清单里那条中文相对路径算出，同一条素材每次都一样）。
+**不能用中文文件名** —— 取这个地址的是 Seedance / ffmpeg / 各种客户端，
+中间谁少做一次 URL 编码就取不到，「音频链接失效」就是这么来的；
+列表上显示的名字来自清单，和文件名无关。
+`load()` 发现本地有副本就交 `${MATERIALS_BASE_URL || WEBHOOK_BASE_URL}/uploads/materials/…`。
+脚本可重复跑（只下缺的，`--force` 全重下），**早先用中文名下过的副本不重下**：
+在新路径上建硬链接（同一份数据不占额外空间），老地址照旧能取，存量数据里的 URL 不失效。
+**失败的逐条打印并以非 0 退出**。`uploads/` 在 .gitignore 里，约 200MB 不进仓库。
 转存后视频/音频只交本机有副本的条目 —— 清单里有 6 条音色在 TOS 上已经 404（方舟自己的清单过期，
 本地也没副本），所以音色从 80 条变成 **74 条**；没跑过转存脚本时行为不变（全给外链）。
-缩略图仍用 TOS 的 `?x-tos-process=…`（本机没有现取首帧的能力）。
+缩略图仍用 TOS 的 `?x-tos-process=…`（本机没有现取首帧和缩放的能力）。
 `lib/uploads.js` 的 `localUploadPath()` 因此放宽到能吃带子目录的路径（带 `../` 穿越检查）。
 两个入口都能用：角色卡的「选音色」（搜索 + 试听，选中后**先入列参考素材**才有 `@音频N` 编号，
 多个角色共用同一条只入列一次），以及「参考素材」标题行的**「素材库」浮窗**
