@@ -39,6 +39,9 @@
 - Mobile responsive with `@media (max-width: 768px)` breakpoints
 - Collapsible sections with useState boolean toggles
 - Primary color: `#2563eb` (blue) for action buttons
+- **要花钱跑的动作统一用橙色** `#ea580c`（hover `#c2410c`，禁用 `#fdba74`）：
+  剧本分析 / 生成分镜脚本 / 一键生成所有分镜视频 / 生成视频N / 重置 / 删除。
+  **红色留给状态**：失败徽章、错误提示条、JSON 格式错误的红框
 - Border buttons for secondary actions (e.g. 参数设置)
 - Resource boxes: gray border `#e5e7eb`, uniform style
 - Sticky params button below nav (top: 44px) on mobile
@@ -57,18 +60,40 @@
 - `MediaPanel` — Upload and display reference media (button in title row)
 - `AssetLibrary` — Collapsible asset library (real/virtual)
 
+### Voiceover-v3 角色卡
+
+剧本分析出来的每个角色一张卡：标题行左边是名字/类型，接着是**头像标签**（缩略图 + 正下方的
+`图片N`，有头像时不显示主体名 —— 那多半是资源名，要核对的是「这张脸是第几张图」）和
+**音色标签**（音色头像 + 正下方的 `音频N`，**点它本身就是试听**，没有单独的 ▶）；
+右侧是「音色」「头像」「删除」三个按钮（原来叫「换音色」「换头像」）。
+卡里是**形象**（= 每一镜提示词里的「角色定义」，原样写入，见「角色锚定」）和**性格**
+（只用于这张卡，不进提示词）两个输入框。
+
 ### Voiceover-v3 Page Flow
 
 只做叙事短片（`video_type` 写死 `story`，不再有类型切换）——
 解说纪录片的入口（视频类型 radio、「配音（可选）」TTS 区）已从这个页面移除，见「两个正交维度」。
 
 1. **角色** — Select characters from project subjects (default: all project subjects)
-2. **视频概念描述** — 唯一的 textarea（或用 AI生成 via DeepSeek）。标题行右侧是
+2. **剧本编写**（页面上的标题，原来叫「视频描述」；状态仍是 `script`）
+   — 唯一的 textarea，写的是故事种子/概念描述，不是写好的剧本。标题行右侧是
    「专业分镜生成」浮窗 —— 那只是**参数面板**，生成由页面上的按钮触发
 3. **参考素材** — Upload images/video/audio
 4. **主体定义** — AI analyze subjects from uploaded media（`/voiceover/analyze-subjects`）
 5. **生成分镜脚本** — 走 `/prompt/storyboard-async`，**后台任务**，可以离开页面（见「分镜生成是后台任务」）
 6. **分镜视频生成** — Submit each shot to Seedance API for video generation
+   - **分镜列表有两种看法**，右上角按钮切换，选择记在 localStorage（`voiceover-v3:shot-view`）：
+     **横排**（默认）= 一排方形小标签（编号 + 状态圆点：绿已生成/红失败/黄排队中/灰未提交），
+     点哪个下面就只渲染哪一镜、且永远展开；**竖排** = 原来那套列表，每张卡各自展开/折叠，
+     这个模式下才有「全部展开/折叠」按钮
+   - **加/删分镜**：横排标签条末尾的 `+`（竖排是最后一张卡下面的通栏按钮）在末尾加一镜，
+     立刻落库（`POST /videos/:id/shots` 本来就按 `MAX(shot_number)+1` 排号）；
+     横排下分镜卡右上角是垃圾桶，删这一镜（`DELETE /shots/:id`，后端自己重排 shot_number）。
+     ⚠️ 删除时**所有按下标存的表都要跟着前移一格**（`tasks`/`shotTabs`/`expandedShots`/
+     `shotJsonEdits`/`dirtyShotIdxs`），**轮询定时器要全部重建** —— `setInterval` 的闭包里
+     锁死的是旧下标，不重建就会把别人的任务结果写到这一镜身上
+   - **合并按钮一直显示**（只要有 ≥1 镜生成成功）。以前是 `succeededCount >= 1 && !mergedVideoUrl`，
+     合过一次就把入口藏进成片那行的小按钮里，全部分镜跑完回到页面反而找不到合并按钮
    - 每 10 秒轮询一次，分镜卡上显示**已等待多久**；排队/生成超过 **3 分钟**
      （`STUCK_AFTER_MS`）就在那一行放出「重新生成」——另开一个任务，
      **旧任务不会被取消**（Seedance 没有取消接口），只是不再轮询它。
@@ -90,7 +115,12 @@
      全塞一个 textarea 时，全片一字不差的定义句和逐镜都不同的画面描述混在一起，
      看不出哪段该改。**只是显示上的拆分** —— 提交时 join 回同一条 prompt 进 JSON 的 `text`，
      round-trip 一字不差，不改任何提交逻辑。定义句的正则和后端 `anchor.js` 的 `MODEL_DEF`
-     是同一套写法，台词段靠 `appendSpeech` 写的那两句抬头认，改哪边都要顺带看另一边
+     是同一套写法，台词段靠 `appendSpeech` 写的那两句抬头认，改哪边都要顺带看另一边。
+     「角色定义」那一段上面还有一排**「选取角色」**小按钮：列出这条视频里绑了图的角色，
+     点一下加、再点一下去掉，句子由 `subjectAnchorOptions()` 按**和后端 `anchor.js` 逐字相同**
+     的句式拼（句式不一致的话，这里插好的句子提交时又会被原文锁换掉，白改）。
+     四个框的高度用 `AutoTextarea` 量 `scrollHeight` 跟着内容走（窗口变宽会重量），
+     不按字数估行数 —— 分段之后每段长短差很远，固定行数不是空半个框就是要在小窗里滚
 7. **分镜合并** — Merge videos + burn SRT subtitles，保留分镜自带的对白原声（ffmpeg）
 
 ### Key Features
@@ -100,6 +130,11 @@
 - **Video caching**: Downloaded videos cached locally with metadata (duration)
 - **Smart subtitle splitting**: Only breaks at punctuation, each shot audio < video duration
 - **State persistence**: Video subjects + media items saved to DB (`video_subjects`, `video_media` tables)
+- ⚠️ **`videos.params` 是整块覆盖写的**（后端 `PUT /videos/:id` 直接 `JSON.stringify` 进 JSONB），
+  少写一个字段就等于把它从库里删掉。所以 voiceover-v3 里**只有 `buildVideoParams()` 一处拼 params**，
+  别处要写就调它、需要改的字段用 extra 覆盖。踩过的坑：生成分镜脚本那三处各拼各的、都漏了
+  `scriptAnalysis`，生成一次分镜就把角色卡（形象/性格/头像绑定/音色绑定）从库里抹掉了。
+  「专业分镜生成」浮窗的设置也在里面（`params.sbSettings`）
 - **Batch tasks**: PostgreSQL persistence for task history
 - **JSON content ordering**（`frontend/lib/contentMedia.ts` 的 `buildContentMedia()`，
   **全项目唯一的一份**）：带图角色的头像在前（按 `video_subjects` 顺序）→ 参考素材按入列顺序
@@ -135,6 +170,7 @@
     从中间切一刀这条参考就废了（不像音色，几秒样本就够）—— 宁可少给一段完整的，
     也不给两段残的。丢靠后的：素材本来就按「重要的排前面」入列
   - 只有音频没有图/视频时，把音频整体去掉（留着必然 failed，没音色只是声音会飘，还能交付）
+- **国内站不支持 480p**：`Unsupported resolution '480p'. Supported: ['1080p', '720p']`
 - **素材数量上限**：一次请求 `image_url` 最多 **9** 个、`video_url` / `audio_url` 各 **3** 个
   （超了接口直接拒：`expected at most 3 audio contents but got 4`）。两道闸：
   - 前端 `voiceover-v3` 的 `MEDIA_CAPS` + `mediaLimit()` 挡在上传/入列那一步。
@@ -187,6 +223,9 @@
 - `POST /voiceover/tts` — Azure TTS audio generation
 - `POST /voiceover/merge` — Concat videos + burn subtitles + mux audio
 - `POST /voiceover/analyze-subjects` — Gemini Vision subject analysis
+- `POST /voiceover/extract-characters` — 只从**已有的对白剧本**里提角色（DeepSeek），
+  不调 `writeScript()`。「剧本分析」是「写剧本 + 提角色」两件事一起做，剧本手改过之后再点它
+  会被整份覆盖；只想按现在这份剧本重提角色时走这条（页面上的「重新分析角色」按钮）
 - `POST /video/generate` — Submit video generation task to Seedance API
 - `GET /video/task/:taskId` — Poll task status (auto-caches on success)
 - `GET /assets/groups` — List asset groups (local DB only, filtered by user_id)
@@ -274,7 +313,7 @@ SDK 会直接拒掉非流式请求；分镜实测 33-80s（skill 越装越多、
 只是 voiceover-v3 不再提供入口，也没有回填过的前端状态（老数据里 `params.videoType === 'narration'`
 的视频，重开时字幕/配音字段仍会被当成普通文本加载，但页面不会再启动 TTS 或按解说纪录片规则合并）。
 
-「专业分镜生成」按钮在「视频概念描述」标题行右侧，点开是**浮窗**（经 `createPortal` 挂到 `body`，
+「专业分镜生成」按钮在「剧本编写」标题行右侧，点开是**浮窗**（经 `createPortal` 挂到 `body`，
 避开页面的 sticky 头部和 overflow 容器；遮罩层透明只用来接外部点击，不遮挡也不锁页面滚动；
 Esc / 点外部关闭），传给它的 `videoType` 是写死的 `"story"`（`controlled` 模式下面板会隐藏自己的
 「视频类型」select）。
@@ -391,6 +430,10 @@ Esc / 点外部关闭），传给它的 `videoType` 是写死的 `"story"`（`co
   （和 `subjectDefs` 那个可编辑框同一个思路）
 - 落库进 `videos.params.dialogueScript`（和 `scriptAnalysis` 同一个 JSONB，没有单独开表/加列），
   页面加载时从 `data.params.dialogueScript` 读回来
+- **「重新分析角色」**（角色页签顶部，有对白剧本时才出现）走 `/voiceover/extract-characters`：
+  只按**当前这份剧本**重提角色，**不重写剧本**（「剧本分析」会连剧本一起重写，手改过的就没了）。
+  **同名角色的头像和音色绑定按 `label` 保留** —— 重提一次就把绑好的脸和嗓子全丢了，比不提还糟；
+  这次没提到的角色，它占的 `video_subjects` 位置也一并撤掉，免得 `@图片N` 编号空着一格
 - 点「生成分镜脚本」时如果 `dialogueScript` 非空，会当 `script` 字段带给
   `/prompt/storyboard-async`——后端认到这个字段就跳过 `writeScript()` 直接进第二步，
   不会把「剧本分析」刚写好的剧本重写一遍。没有 `dialogueScript`（用户没点过剧本分析、
@@ -411,6 +454,11 @@ Esc / 点外部关闭），传给它的 `videoType` 是写死的 `"story"`（`co
 当前页面等着，断了大不了重新点一次；取到 `done`/`failed` 结果就把任务从 `scriptJobs`
 删掉（storyboard 那边是要等 TTL 过期，这里操作短，没必要留着占内存）。
 剧本写完后顺带跑的角色提取（DeepSeek）不流式——那一步本来就快，没必要为它加轮询。
+
+**「剧本改写」浮窗**（对白剧本页签右上角，原名「AI改写」）：拿页面上已经写好的剧本原文 +
+一句改写要求，走 `/voiceover/rewrite-script-async` + `/rewrite-script-status/:jobId` 流式吐出改完的
+整份剧本。和剧本分析同一套轮询手法，但结果写进 `rewritePreview`（浮窗里的预览框）
+**而不是直接覆盖正文** —— 改写有可能跑偏，用户看完预览点「采用」才写回 `dialogueScript`。
 
 **字幕就是台词的准绳**（`prompt/speech.js` 的 `syncSpeechWithSubtitle`）：结构化的 `dialogue`
 没有落库（`shots` 只有 `subtitle` 一列），页面上改一次字幕，prompt 末尾那段台词就对不上了 ——
@@ -500,12 +548,14 @@ front matter 用 `when_*` 声明生效条件，**加一条手艺 = 丢一个 `.m
 每镜独立生成，Seedance 就当成两个人配两把嗓子。后端按 speaker 统计出现最多的那个写法
 （同频取更具体的长句），把全片所有台词行换成它，音色行里的 `X` 用的是同一个。
 
-**没绑就自动配**：生成分镜那一刻，页面给每个还没绑音色的角色从预设库挑一条钉死
-（`pickPresetVoice`，按角色卡文字猜性别和年龄段 → 音色库的 `青年/少年_少女/中年/儿童/老年`
-分组 + 性别；挑没被占用的，同性别同龄的角色用 index 错开不撞车）。挑好的音频当场入列参考素材，
-`voice_bindings` 用**刚算好的那份**拼（state 还没落地，所以 `subjectContext` 抽成了纯函数
-`buildSubjectContext`，能拿新值直接构建）。音频配额（`mediaLimit('audio')`，见「素材数量上限」）用完就不再配，
-剩下的角色退回模型写的英文音色描述。
+**音色不自动配**（2026-09 去掉）：以前点「生成分镜脚本」那一刻，页面会给每个没绑音色的角色
+从预设库挑一条钉死并当场入列参考素材（`pickPresetVoice` + `guessGender`/`guessAgeGroup`，
+三个函数已删）—— 结果是每点一次生成，「参考素材」里就凭空多出几条不是用户加的音频。
+现在**只用页面上已经绑好的音色**，没绑的角色退回模型写的英文音色描述（`Voice of X: …`）。
+代价说清楚：没绑音色的角色逐镜声音会飘（每镜独立生成，一句英文描述收不死音色），
+要锁死就在角色卡上点「音色」自己挑一条。
+`voice_bindings` 仍用**当场算好的那份**拼（state 还没落地，所以 `subjectContext` 抽成了纯函数
+`buildSubjectContext`，能拿新值直接构建）。
 
 **页面上绑音色**：剧本分析的角色卡上有「选音色」，从已上传的参考音频里挑一条
 （按 **url** 绑，不按 uid —— 重开页面 media 的 uid 会变），存进 `params.scriptAnalysis[].linkedAudioUrl`。
@@ -539,14 +589,22 @@ front matter 用 `when_*` 声明生效条件，**加一条手艺 = 丢一个 `.m
 脚本可重复跑（只下缺的，`--force` 全重下），**早先用中文名下过的副本不重下**：
 在新路径上建硬链接（同一份数据不占额外空间），老地址照旧能取，存量数据里的 URL 不失效。
 **失败的逐条打印并以非 0 退出**。`uploads/` 在 .gitignore 里，约 200MB 不进仓库。
+存量数据用 `node backend/scripts/relink-material-urls.js`（默认演练，`--apply` 才写库）指到新地址 ——
+**`video_media.url` 和 `videos.params.scriptAnalysis[].linkedAudioUrl` 必须一起改**
+（音色绑定是按 url 认人的，只改一边绑定就断了）。
 转存后视频/音频只交本机有副本的条目 —— 清单里有 6 条音色在 TOS 上已经 404（方舟自己的清单过期，
 本地也没副本），所以音色从 80 条变成 **74 条**；没跑过转存脚本时行为不变（全给外链）。
 缩略图仍用 TOS 的 `?x-tos-process=…`（本机没有现取首帧和缩放的能力）。
 `lib/uploads.js` 的 `localUploadPath()` 因此放宽到能吃带子目录的路径（带 `../` 穿越检查）。
-两个入口都能用：角色卡的「选音色」（搜索 + 试听，选中后**先入列参考素材**才有 `@音频N` 编号，
+两个入口都能用：角色卡的**「音色」**按钮（搜索 + 试听，选中后**先入列参考素材**才有 `@音频N` 编号，
 多个角色共用同一条只入列一次），以及「参考素材」标题行的**「素材库」浮窗**
 （视频/音频/图片三个页签 + 搜索，点一下即入列，受素材数量上限约束；
 浮窗顶部另有**「粘贴链接」**一栏，任意 http(s) 直链按当前页签入列，文件名按 URL 末段解出中文）。
+角色卡的「音色」浮窗里另有一栏**「资源库音频」**：真人/虚拟资源组里 `AssetType === 'Audio'`
+的资源（`loadVerifiedAssets()` 和头像同一趟请求里一起取回来——头像那栏只列 `Image`，
+音频进不了 `@图片N` 的位）。选中同样是先入列参考素材拿到 `@音频N` 编号再绑，`uid` 前缀 `asset-`
+（解绑时和预设音色一样会撤出参考素材）。列表项常常不带 `URL`，逐条 `GetAsset` 补一次，
+补不到的不给选（入列了也交不给 Seedance，只白占一个编号）。
 缩略图不落库（音色头像是 base64，太大）—— 列表渲染时按 url 现查 `presetThumbByUrl`，
 视频没有现成缩略图时用 `?x-tos-process=video/snapshot,t_0,h_600` 现取首帧。
 
@@ -671,12 +729,23 @@ TTS 转成 Azure 的 `<mstts:express-as style=… styledegree=1.0~1.2>`。
 - 原文来自页面的 `subject_definitions`（一行一个角色：`角色「X」绑定@图片N，外貌描述：…`）。
   voiceover-v3 用**剧本分析的 `appearance`** 作原文，没分析过才退回主体自带 `description`；
   性格不进定义句（定义要挑不随剧情变的静态特征）。**必须压成一行** —— 后端按行解析
-- 后端 `lockSubjectAnchors()`（`routes/prompt.js`）把模型写的 `将@图片N中…定义为<主体M>，…；`
+- 后端 `lockSubjectAnchors()`（`prompt/anchor.js`，`routes/prompt.js` 和 `routes/video.js`
+  两处「三道闸」共用同一份）把模型写的 `将@图片N中…定义为<主体M>，…；`
   整句换成 `将@图片N中<原文>定义为<主体N>`，贴回原处（前面是运镜画幅、后面是锁定短语，
   两头不动）。模型漏写定义句、只用 `<主体N>` 或 `@图片N` 指代的，锚定句补在最前面
+- **绑了音色的角色，定义句里连音色一起锁死**：`subject_definitions` 那行写了
+  `、音色@音频M` 时，锁出来的句子是 `将@图片N中<原文>定义为<主体N>，<主体N>的音色使用@音频M`
+  （`anchor.js` 的 `parseSubjectDefs()`）——不然音色只在有台词的镜头里靠
+  `syncSpeechWithSubtitle` 贴的「说话人身份对应」那行才提一次（见「叙事短片的人声来自视频自身」上方的
+  字幕重建段落），这个角色只是在场但这一镜不开口时就完全没提过音色；每镜独立生成，
+  形象和音色不锁在同一句里，声音跟着漂
 - **标签编号归一到图片编号**：模型把 `@图片2` 的人叫成 `<主体1>` 时，整镜的标签一并换掉
   （先落占位符再换，否则 1↔2 互换会自己撞上自己）
-- 外貌写着「见图片」「未提供」的角色不锁 —— 贴一句空定义还不如让模型照着图写；
+- **外貌写着「见图片」「未提供」的角色不锁外貌** —— 贴一句空定义还不如让模型照着图写，
+  模型自己写的那句定义原样保留、不参与上面的整句替换/标签归一；**但绑了音色的话音色仍要锁**，
+  退化成单独追加一句 `<主体N>的音色使用@音频N；`（不带外貌部分，贴在模型自己写的定义句前面）——
+  「选取角色」点选面板（`page.tsx` 的 `subjectAnchorOptions()`，和这里逐字同一套规则）里
+  这类角色也照样给选，插的就是这句短的。
   没在 `subject_definitions` 里出现的图片编号（参考素材）原样不动
 - **只定义这一镜真的出场的角色**：出场与否按「定义句之外还提没提到 `<主体N>` / `@图片N`」判定，
   **不采信模型写了几句定义** —— 角色单是整片共用的，模型习惯性地每镜把所有人都定义一遍，

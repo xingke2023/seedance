@@ -499,9 +499,17 @@ function subjectAnchorOptions(characterDefs: string) {
     if (!m) continue;
     const num = Number(m[2]);
     const desc = m[3].trim();
-    // 外貌写着「见图片」「未提供」的不给选 —— 贴一句空定义还不如不贴（后端也是这么判的）
-    if (!num || !desc || desc === '见图片' || desc === '未提供') continue;
-    out.push({ num, name: m[1].trim(), anchor: `将@图片${num}中${desc}定义为<主体${num}>` });
+    // 外貌写着「见图片」「未提供」的不算数 —— 贴一句空定义还不如不贴（后端也是这么判的）
+    const hasDesc = !!(desc && desc !== '见图片' && desc !== '未提供');
+    // 绑了音色的角色，句子里连音色一起插——和后端 anchor.js 的 parseSubjectDefs 同一条规则
+    const av = line.match(/音色\s*[<@]?\s*音频\s*(\d+)/);
+    const audioRef = av ? Number(av[1]) : 0;
+    // 外貌和音色至少占一样，两样都没有就不给选
+    if (!num || (!hasDesc && !audioRef)) continue;
+    const anchor = hasDesc
+      ? `将@图片${num}中${desc}定义为<主体${num}>${audioRef ? `，<主体${num}>的音色使用@音频${audioRef}` : ''}`
+      : `<主体${num}>的音色使用@音频${audioRef}`;   // 没外貌可锁，只插音色短句
+    out.push({ num, name: m[1].trim(), anchor });
   }
   return out.sort((a, b) => a.num - b.num);
 }
@@ -739,26 +747,35 @@ interface RemoteAssetGroup { Id: string; Name: string | null; GroupType: 'AIGC' 
 
 // 换头像走 /assets/real、/assets/virtual 同一套逻辑（先取该 groupType 下用户可见的资源组，
 // 再逐组取资源），不用 /assets/all——那条路径的 GetAsset 兜底不带 _thumbnail_url，图片列表里会丢缩略图。
-// 真人（LivenessFace）只能经活体验证入库，这一步天然只认证过的资源；只取 Image 类型，头像要的是静态照片。
-async function loadVerifiedAvatars(groupType: 'AIGC' | 'LivenessFace'): Promise<RemoteAsset[]> {
+// 真人（LivenessFace）只能经活体验证入库，这一步天然只认证过的资源。
+// **图片和音频一起取回来**：Image 给「头像」（头像要的是静态照片，音频进不了 @图片N 的位），
+// Audio 给角色卡的「音色」—— 资源组里的音频原来在 voiceover-v3 上没有任何入口，
+// 而这两趟本来就是同一批请求（每个组各拉一次 ListAssets），分两个函数取就是白跑一遍。
+async function loadVerifiedAssets(groupType: 'AIGC' | 'LivenessFace'): Promise<{ images: RemoteAsset[]; audios: RemoteAsset[] }> {
   try {
     const groupsRes = await api.get<{ Items: RemoteAssetGroup[] }>(`/assets/groups?groupType=${groupType}&region=cn`);
     const groups = groupsRes?.Items || [];
     const perGroup = await Promise.all(groups.map(async g => {
       try {
         const assetsRes = await api.get<{ Items: RemoteAsset[] }>(`/assets/groups/${g.Id}/assets?region=cn`);
-        const images = (assetsRes?.Items || []).filter(a => a.AssetType === 'Image');
-        return Promise.all(images.map(async item => {
-          if (item._thumbnail_url) return item;
+        const items = (assetsRes?.Items || []).filter(a => a.AssetType === 'Image' || a.AssetType === 'Audio');
+        return Promise.all(items.map(async item => {
+          // 图片缺的是缩略图，音频缺的是 URL（列表项常常两样都不带）——差哪样都得回 GetAsset 补一次
+          if (item.AssetType === 'Image' ? item._thumbnail_url : item.URL) return item;
           try {
             const detail = await api.get<{ URL?: string; Status?: string; _thumbnail_url?: string }>(`/assets/item/${item.Id}?region=cn`);
-            return { ...item, URL: detail.URL || item.URL, _thumbnail_url: detail._thumbnail_url, Status: detail.Status || item.Status };
+            return { ...item, URL: detail.URL || item.URL, _thumbnail_url: detail._thumbnail_url || item._thumbnail_url, Status: detail.Status || item.Status };
           } catch { return item; }
         }));
       } catch { return []; }
     }));
-    return perGroup.flat();
-  } catch { return []; }
+    const all = perGroup.flat();
+    return {
+      images: all.filter(a => a.AssetType === 'Image'),
+      // 没取到 URL 的音频不给选：入列了也没法交给 Seedance，只会白占一个 @音频N 编号
+      audios: all.filter(a => a.AssetType === 'Audio' && a.URL),
+    };
+  } catch { return { images: [], audios: [] }; }
 }
 
 function AssetLibrary({ groupType, title, color, selectedIds, onAdd, onRemove }: {
@@ -1395,6 +1412,8 @@ export default function VoiceoverPage() {
   const [uploadError, setUploadError] = useState('');
   const [realAvatars, setRealAvatars]     = useState<RemoteAsset[]>([]);
   const [virtualAvatars, setVirtualAvatars] = useState<RemoteAsset[]>([]);
+  // 资源组里 AssetType === 'Audio' 的资源，供角色卡「音色」用（头像浮窗只认 Image）
+  const [assetAudios, setAssetAudios]     = useState<RemoteAsset[]>([]);
   const [avatarLoading, setAvatarLoading] = useState(false);
   const [avatarSearch, setAvatarSearch] = useState('');
   const [avatarPickerIdx, setAvatarPickerIdx] = useState<number | null>(null);
@@ -1633,22 +1652,26 @@ export default function VoiceoverPage() {
   // 选一条预设音色给角色：它得先成为参考素材才有 @音频N 的编号，所以先入列再绑定。
   // 同一条音色多个角色共用时只入列一次（编号也就只占一个位）。
   // 一条预设音频还有没有别人在用；没有就该撤出参考素材（自己上传的不算，那是用户主动传的）
+  // uid 前缀 asset- 的是资源组里的音频（「音色」里选的，同样是替角色入列的），一并算作可撤出
   function releasePresetAudio(url: string | undefined, analysis: typeof scriptAnalysis) {
     if (!url || analysis.some(a => a.linkedAudioUrl === url)) return;
     const item = mediaItems.find(m => m.url === url);
-    if (item && (item.uid?.startsWith('preset-') || (item.description || '').startsWith('预设素材：'))) {
+    if (item && (/^(preset|asset)-/.test(item.uid || '') || (item.description || '').startsWith('预设素材：'))) {
       setMediaItems(prev => prev.filter(m => m.url !== url));
     }
   }
 
-  function pickVoicePreset(idx: number, preset: { name: string; url: string; duration?: string }) {
+  // 预设音色库和资源组音频共用这一个：都得先成为参考素材才有 @音频N 的编号。
+  // desc 会拼进提示词的素材清单（模型漏写 voice_zh 时后端还拿它兜底），所以两边分别写明来源
+  function pickVoicePreset(idx: number, preset: { name: string; url: string; duration?: string },
+                           opts?: { uidPrefix?: string; desc?: string }) {
     // 总时长超了不拦：提交时后端按条数分摊着截短（3 条各 ~4.8s），克隆音色几秒样本就够
     setMediaItems(prev => prev.some(m => m.url === preset.url) ? prev : [...prev, {
-      uid: `preset-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      uid: `${opts?.uidPrefix || 'preset'}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       mediaType: 'audio' as const,
       url: preset.url,
       name: preset.name,
-      description: `预设音色：${preset.name}`,   // 模型漏写 voice_zh 时后端拿它兜底
+      description: opts?.desc || `预设音色：${preset.name}`,   // 模型漏写 voice_zh 时后端拿它兜底
     }]);
     const prevUrl = scriptAnalysis[idx]?.linkedAudioUrl;
     const next = scriptAnalysis.map((s, i) => i === idx ? { ...s, linkedAudioUrl: preset.url, _voicePickerOpen: false } : s);
@@ -1763,9 +1786,12 @@ export default function VoiceoverPage() {
   async function refreshAvatars() {
     setAvatarLoading(true);
     try {
-      const [real, virtual] = await Promise.all([loadVerifiedAvatars('LivenessFace'), loadVerifiedAvatars('AIGC')]);
-      setRealAvatars(real);
-      setVirtualAvatars(virtual);
+      const [real, virtual] = await Promise.all([loadVerifiedAssets('LivenessFace'), loadVerifiedAssets('AIGC')]);
+      setRealAvatars(real.images);
+      setVirtualAvatars(virtual.images);
+      // 同一条资源可能同时挂在多个组上，按 Id 去重；真人组基本不会放音频，两边合起来取
+      const seen = new Set<string>();
+      setAssetAudios([...virtual.audios, ...real.audios].filter(a => !seen.has(a.Id) && !!seen.add(a.Id)));
     } finally {
       setAvatarLoading(false);
     }
@@ -3331,7 +3357,7 @@ export default function VoiceoverPage() {
                                 {/* 音色绑定：从已上传的参考音频里挑一条，@音频N 的编号 = 上传顺序。
                                     绑了之后后端逐镜贴同一句「使用@音频N…的音色说话」，
                                     不再让模型自己猜哪条音频是谁的声音 */}
-                                {(audioItems.length > 0 || voicePresets.length > 0) && (
+                                {(audioItems.length > 0 || voicePresets.length > 0 || assetAudios.length > 0) && (
                                   <span style={{ position: 'relative' }}>
                                     <button type="button" onClick={() => setScriptAnalysis(prev => prev.map((s, i) => i === idx ? { ...s, _voicePickerOpen: !s._voicePickerOpen } : { ...s, _voicePickerOpen: false }))}
                                       style={{ fontSize: 11, padding: '3px 8px', border: '1px solid #0891b2', borderRadius: 4, background: item.linkedAudioUrl ? '#ecfeff' : '#fff', color: '#0891b2', cursor: 'pointer' }}>
@@ -3347,6 +3373,27 @@ export default function VoiceoverPage() {
                                             </div>
                                           ))}
                                         </div>
+                                        {/* 资源库音频：真人/虚拟资源组里 AssetType=Audio 的资源。
+                                            头像浮窗只列 Image（见 loadVerifiedAssets），这些音频原来在页面上没有入口。
+                                            和预设音色同一条路：选中先入列参考素材拿到 @音频N 编号，再绑给这个角色 */}
+                                        {assetAudios.length > 0 && (
+                                          <div style={{ marginTop: 8, borderTop: '1px solid #f1f5f9', paddingTop: 8 }}>
+                                            <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 6 }}>资源库音频 {assetAudios.length}</div>
+                                            <div style={{ maxHeight: 160, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
+                                              {assetAudios.map(a => (
+                                                <div key={a.Id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 6px', borderRadius: 4, fontSize: 12, background: item.linkedAudioUrl === a.URL ? '#ecfeff' : '#f9fafb', border: item.linkedAudioUrl === a.URL ? '1px solid #0891b2' : '1px solid transparent' }}>
+                                                  <span onClick={() => pickVoicePreset(idx, { name: a.Name || '资源音频', url: a.URL as string },
+                                                    { uidPrefix: 'asset', desc: `资源库音色：${a.Name || a.Id}` })}
+                                                    style={{ flex: 1, minWidth: 0, cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                    {a.Name || a.Id}
+                                                  </span>
+                                                  <button type="button" onClick={() => { previewAudioRef.current?.pause(); const au = new Audio(a.URL); previewAudioRef.current = au; au.play().catch(() => {}); }}
+                                                    style={{ fontSize: 10, padding: '1px 5px', border: '1px solid #cbd5e1', borderRadius: 3, background: '#fff', color: '#475569', cursor: 'pointer' }}>试听</button>
+                                                </div>
+                                              ))}
+                                            </div>
+                                          </div>
+                                        )}
                                         {/* 方舟预设音色：选中先入列参考素材（拿到 @音频N 编号）再绑给这个角色 */}
                                         {voicePresets.length > 0 && (
                                           <div style={{ marginTop: 8, borderTop: '1px solid #f1f5f9', paddingTop: 8 }}>

@@ -34,15 +34,26 @@ function parseSubjectDefs(text) {
     if (!m) continue
     const n = Number(m[2])
     const desc = str(m[3])
-    // 没写外貌的（「见图片」「未提供」）不锁 —— 贴一句空定义还不如让模型照着图写
-    if (!n || !desc || desc === '见图片' || desc === '未提供') continue
+    // 没写外貌的（「见图片」「未提供」）不锁外貌 —— 贴一句空定义还不如让模型照着图写
+    const hasDesc = !!(desc && desc !== '见图片' && desc !== '未提供')
     // 同一行里可能还绑了音色：`角色「小李」绑定@图片1、音色@音频1，外貌描述：…`
+    // 绑了音色的角色，音色还是要锁死——不然音色只在有台词的镜头里靠
+    // 「说话人身份对应」那行才提一次，没台词的镜头（这个角色只是在场但不开口）
+    // 就完全没提过音色，逐镜独立生成，形象和音色没锁在一起就等于没锁
     const av = line.match(/音色\s*[<@]?\s*音频\s*(\d+)/)
+    const audioRef = av ? Number(av[1]) : 0
+    // 外貌和音色至少锁一样，两样都没有才跳过
+    if (!n || (!hasDesc && !audioRef)) continue
     defs.set(n, {
       name: str(m[1]),
-      desc,
-      audioRef: av ? Number(av[1]) : 0,
-      anchor: `将@图片${n}中${desc}定义为<主体${n}>`,
+      desc: hasDesc ? desc : '',
+      audioRef,
+      // 有外貌原文的整句锁死（外貌+音色一起写进定义句）；只绑了音色、没填外貌的
+      // 没有原文可锁外貌——不整句替换模型自己写的定义（那是它唯一的外貌依据），
+      // anchor 留空，改由 lockSubjectAnchors 单独追加一句音色锁定，不碰外貌部分
+      anchor: hasDesc
+        ? `将@图片${n}中${desc}定义为<主体${n}>${audioRef ? `，<主体${n}>的音色使用@音频${audioRef}` : ''}`
+        : '',
     })
   }
   return defs
@@ -53,7 +64,12 @@ function lockSubjectAnchors(promptEn, defs) {
   const text = String(promptEn || '')
   if (!text.trim() || defs.size === 0) return text
 
-  const found = [...text.matchAll(MODEL_DEF)].filter(m => defs.has(Number(m[1])))
+  // 只有填了外貌原文（anchor 非空）的角色才整句替换模型写的定义句；
+  // 只绑了音色、没填外貌的（anchor 为空）留到下面单独追加，不碰模型自己写的外貌猜测
+  const lockable  = new Map([...defs].filter(([, d]) => d.anchor))
+  const audioOnly = new Map([...defs].filter(([, d]) => !d.anchor && d.audioRef))
+
+  const found = [...text.matchAll(MODEL_DEF)].filter(m => lockable.has(Number(m[1])))
   const relabel = new Map()   // 模型给的主体编号 → 该角色绑定的图片编号
   const defined = new Set()   // 模型在这一镜写了定义句的角色
   const used = new Set()      // 这一镜**真的出场**的角色（按图片编号）
@@ -64,7 +80,7 @@ function lockSubjectAnchors(promptEn, defs) {
 
   // 删掉模型写的定义句；第一句的位置留个记号，原文锚定句贴回原处 ——
   // 它前面通常是运镜和画幅、后面是锁定短语，两头都不该被挪动
-  const MARK = '\u0002ANCHORS\u0002'
+  const MARK = 'ANCHORS'
   let out = ''
   let cursor = 0
   found.forEach((m, i) => {
@@ -77,22 +93,33 @@ function lockSubjectAnchors(promptEn, defs) {
   out = out
     .replace(SUBJ_TAG, (whole, label) => {
       const n = relabel.get(Number(label))
-      return n ? `\u0001${n}\u0001` : whole
+      return n ? `${n}` : whole
     })
-    .replace(/\u0001(\d+)\u0001/g, '<主体$1>')
+    .replace(/(\d+)/g, '<主体$1>')
 
   // 定义句删掉后还提到谁，谁就是这一镜的出场角色 —— 模型漏写定义句、只用标签指代也算出场。
   // **只按这个判定，不采信模型写了几句定义**：一条片子的角色单是整片共用的，模型习惯性地
   // 把所有人都定义一遍，这一镜其实只有一个人在画面里 —— 多贴的那句定义等于告诉 Seedance
   // 「画面里还有这么一个人」，轻则挤进背景，重则把两个人的长相揉到一起。
   for (const re of [SUBJ_TAG, IMG_REF]) {
-    for (const m of out.matchAll(re)) if (defs.has(Number(m[1]))) used.add(Number(m[1]))
+    for (const m of out.matchAll(re)) if (lockable.has(Number(m[1]))) used.add(Number(m[1]))
   }
   // 兜底：正文里一个标签/编号都没提，但模型确实定义了人 —— 这时删光定义等于这一镜完全没有
   // 角色锚定，宁可多贴也不要不贴，退回模型定义的那批
   if (used.size === 0) for (const n of defined) used.add(n)
 
-  const anchors = [...used].sort((a, b) => a - b).map(n => defs.get(n).anchor).join('；')
+  // 只绑音色没填外貌的角色不参与上面的定义句替换/relabel（模型自己写的外貌猜测原样留着），
+  // 单独按「这一镜有没有提到这个人」（标签或 @图片N，在 relabel 之后的 out 上查）
+  // 判定要不要追加一句音色锁定：`<主体N>的音色使用@音频N；`
+  const audioUsed = new Set()
+  for (const re of [SUBJ_TAG, IMG_REF]) {
+    for (const m of out.matchAll(re)) if (audioOnly.has(Number(m[1]))) audioUsed.add(Number(m[1]))
+  }
+
+  const anchors = [
+    ...[...used].sort((a, b) => a - b).map(n => lockable.get(n).anchor),
+    ...[...audioUsed].sort((a, b) => a - b).map(n => `<主体${n}>的音色使用@音频${audioOnly.get(n).audioRef}`),
+  ].join('；')
   if (!anchors) return out.replace(MARK, '')
   return out.includes(MARK) ? out.replace(MARK, `${anchors}；`) : `${anchors}；${out}`
 }

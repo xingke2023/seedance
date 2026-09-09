@@ -568,7 +568,6 @@ ${dialogueScript}`
       body: JSON.stringify({
         model,
         messages: [{ role: 'user', content: prompt }],
-        temperature: 0.3,
         max_tokens: 2048,
       }),
       signal: AbortSignal.timeout(30_000),
@@ -815,7 +814,6 @@ ${dialogueScript}`
         body: JSON.stringify({
           model,
           messages: [{ role: 'user', content: prompt }],
-          temperature: 0.9,
           max_tokens: 1024,
         }),
         signal: AbortSignal.timeout(30_000),
